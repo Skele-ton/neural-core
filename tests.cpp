@@ -167,6 +167,104 @@ TEST_CASE("generate_spiral_data throws on invalid arguments")
     CHECK_THROWS_AS(generate_spiral_data(10, 0, X, y), runtime_error);
 }
 
+TEST_CASE("random_uniform produces values in unit interval")
+{
+    g_rng.seed(0);
+    double first = random_uniform();
+    double second = random_uniform();
+
+    CHECK(first >= 0.0);
+    CHECK(first < 1.0);
+    CHECK(second >= 0.0);
+    CHECK(second < 1.0);
+}
+
+TEST_CASE("generate_vertical_data throws on invalid arguments")
+{
+    MatD X;
+    VecI y;
+
+    CHECK_THROWS_AS(generate_vertical_data(0, 3, X, y), runtime_error);
+    CHECK_THROWS_AS(generate_vertical_data(5, 0, X, y), runtime_error);
+}
+
+TEST_CASE("generate_vertical_data fills samples with labels")
+{
+    MatD X;
+    VecI y;
+
+    g_rng.seed(0);
+    generate_vertical_data(4, 3, X, y);
+
+    CHECK(X.rows == 12);
+    CHECK(X.cols == 2);
+    CHECK(y.size() == 12);
+
+    for (size_t i = 0; i < y.size(); ++i) {
+        CHECK(y[i] >= 0);
+        CHECK(y[i] < 3);
+        CHECK(std::isfinite(X(i, 0)));
+        CHECK(std::isfinite(X(i, 1)));
+    }
+
+    double min_x = X(0, 0), max_x = X(0, 0);
+    double min_y = X(0, 1), max_y = X(0, 1);
+    for (size_t i = 1; i < X.rows; ++i) {
+        min_x = std::min(min_x, X(i, 0));
+        max_x = std::max(max_x, X(i, 0));
+        min_y = std::min(min_y, X(i, 1));
+        max_y = std::max(max_y, X(i, 1));
+    }
+
+    CHECK(max_x != min_x);
+    CHECK(max_y != min_y);
+}
+
+TEST_CASE("plot_scatter_svg validates inputs and paths")
+{
+    MatD empty;
+    CHECK_THROWS_AS(plot_scatter_svg("unused.svg", empty), runtime_error);
+
+    MatD wrong_cols(1, 1, 0.0);
+    CHECK_THROWS_AS(plot_scatter_svg("unused.svg", wrong_cols), runtime_error);
+
+    MatD points(1, 2, 0.5);
+    VecI labels = {0};
+    CHECK_THROWS_AS(plot_scatter_svg("/nonexistent_dir/plot.svg", points, labels), runtime_error);
+}
+
+TEST_CASE("plot_scatter_svg writes circles with optional labels")
+{
+    MatD points(3, 2);
+    points(0, 0) = 0.0; points(0, 1) = 0.0;
+    points(1, 0) = 1.0; points(1, 1) = 0.5;
+    points(2, 0) = 0.5; points(2, 1) = 1.0;
+
+    VecI labels = {0, 1, 2};
+    const std::string path = "test_plot.svg";
+
+    plot_scatter_svg(path, points, labels);
+
+    std::ifstream file(path);
+    REQUIRE(file.good());
+
+    std::string line;
+    bool saw_svg = false;
+    int circles = 0;
+    while (std::getline(file, line)) {
+        if (!saw_svg && line.find("<svg") != std::string::npos) {
+            saw_svg = true;
+        }
+        if (line.find("<circle") != std::string::npos) {
+            ++circles;
+        }
+    }
+
+    CHECK(saw_svg == true);
+    CHECK(circles == 3);
+    std::remove(path.c_str());
+}
+
 // layer_forward_batch tests
 TEST_CASE("layer_forward_batch matches known example")
 {

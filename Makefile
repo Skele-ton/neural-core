@@ -2,7 +2,7 @@ CXX ?= g++
 CXXFLAGS ?= -std=c++17 -O2 -Wall -Wextra
 LDFLAGS ?=
 
-APP := nnfs_diploma
+APP := NNFS_Diploma
 APP_SRC := NNFS_Diploma.cpp
 
 TEST_BIN := tests
