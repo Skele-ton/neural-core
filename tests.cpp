@@ -29,76 +29,32 @@ TEST_CASE("Matrix empty and transpose on empty")
     MatD m;
     CHECK(m.is_empty() == true);
 
-    MatD t = transpose(m);
+    MatD t = m.transpose();
     CHECK(t.is_empty() == true);
 }
 
-TEST_CASE("print_vector and print_matrix write expected output")
+TEST_CASE("Matrix print writes expected output")
 {
     std::ostringstream oss;
     auto* old_buf = cout.rdbuf(oss.rdbuf());
 
-    VecD v = {1.0, 2.5, -3.0};
-    print_vector(v);
-
     MatD m(2, 2);
     m(0, 0) = 1.0; m(0, 1) = 2.0;
     m(1, 0) = 3.0; m(1, 1) = 4.5;
-    print_matrix(m);
+    m.print();
 
     cout.rdbuf(old_buf);
 
-    CHECK(oss.str() == "1 2.5 -3\n1 2\n3 4.5\n");
+    CHECK(oss.str() == "1 2\n3 4.5\n");
 }
 
-// matmul tests
-TEST_CASE("matmul multiplies small matrices correctly")
-{
-    MatD a(2, 3);
-    a(0, 0) = 1.0; a(0, 1) = 2.0; a(0, 2) = 3.0;
-    a(1, 0) = 4.0; a(1, 1) = 5.0; a(1, 2) = 6.0;
-
-    MatD b(3, 2);
-    b(0, 0) = 7.0; b(0, 1) = 8.0;
-    b(1, 0) = 9.0; b(1, 1) = 10.0;
-    b(2, 0) = 11.0; b(2, 1) = 12.0;
-
-    MatD c = matmul(a, b);
-    CHECK(c.rows == 2);
-    CHECK(c.cols == 2);
-
-    CHECK(c(0, 0) == doctest::Approx(58.0));
-    CHECK(c(0, 1) == doctest::Approx(64.0));
-    CHECK(c(1, 0) == doctest::Approx(139.0));
-    CHECK(c(1, 1) == doctest::Approx(154.0));
-}
-
-TEST_CASE("matmul throws on empty matrices")
-{
-    MatD a;
-    MatD b(1, 1, 1.0);
-    CHECK_THROWS_AS(matmul(a, b), runtime_error);
-
-    MatD c(1, 1, 1.0);
-    MatD d;
-    CHECK_THROWS_AS(matmul(c, d), runtime_error);
-}
-
-TEST_CASE("matmul throws on incompatible shapes")
-{
-    MatD a(2, 3);
-    MatD b(4, 1);
-    CHECK_THROWS_AS(matmul(a, b), runtime_error);
-}
-
-// transpose tests
-TEST_CASE("transpose swaps rows and columns and values")
+TEST_CASE("Matrix transpose swaps rows and columns and values")
 {
     MatD m(2, 3);
     m(0, 0) = 1.0; m(0, 1) = 2.0; m(0, 2) = 3.0;
     m(1, 0) = 4.0; m(1, 1) = 5.0; m(1, 2) = 6.0;
 
-    MatD t = transpose(m);
+    MatD t = m.transpose();
     CHECK(t.rows == 3);
     CHECK(t.cols == 2);
 
@@ -110,14 +66,13 @@ TEST_CASE("transpose swaps rows and columns and values")
     CHECK(t(2, 1) == doctest::Approx(6.0));
 }
 
-// clip_matrix tests
-TEST_CASE("clip_matrix clamps values to bounds")
+TEST_CASE("Matrix clip clamps values to bounds")
 {
     MatD m(2, 3);
     m(0, 0) = -1.0; m(0, 1) = 0.2; m(0, 2) = 1.5;
     m(1, 0) = 0.8; m(1, 1) = 0.0; m(1, 2) = 2.0;
 
-    MatD clipped = clip_matrix(m, 0.1, 1.0);
+    MatD clipped = m.clip(0.1, 1.0);
 
     CHECK(clipped(0, 0) == doctest::Approx(0.1));
     CHECK(clipped(0, 1) == doctest::Approx(0.2));
@@ -127,29 +82,80 @@ TEST_CASE("clip_matrix clamps values to bounds")
     CHECK(clipped(1, 2) == doctest::Approx(1.0));
 }
 
-TEST_CASE("clip_matrix throws when min exceeds max")
+TEST_CASE("Matrix clip throws when min exceeds max")
 {
     MatD m(1, 1, 0.0);
-    CHECK_THROWS_AS(clip_matrix(m, 2.0, 1.0), runtime_error);
+    CHECK_THROWS_WITH_AS(m.clip(2.0, 1.0),
+                         "clip: min_value must not exceed max_value",
+                         runtime_error);
 }
 
-TEST_CASE("scale_by_samples throws on zero samples")
+TEST_CASE("Matrix scale_by_scalar throws on zero samples")
 {
     MatD m(1, 1, 2.0);
-    CHECK_THROWS_AS(scale_by_samples(m, 0), runtime_error);
+    CHECK_THROWS_WITH_AS(m.scale_by_scalar(0),
+                         "scale_by_scalar: samples must be bigger than 0",
+                         runtime_error);
 }
 
-// mean tests
-TEST_CASE("mean returns correct average")
+// matrix_dot tests
+TEST_CASE("matrix_dot multiplies small matrices correctly")
 {
-    VecD v = {1.0, 2.0, 3.0, 4.0};
-    CHECK(mean(v) == doctest::Approx(2.5));
+    MatD a(2, 3);
+    a(0, 0) = 1.0; a(0, 1) = 2.0; a(0, 2) = 3.0;
+    a(1, 0) = 4.0; a(1, 1) = 5.0; a(1, 2) = 6.0;
+
+    MatD b(3, 2);
+    b(0, 0) = 7.0; b(0, 1) = 8.0;
+    b(1, 0) = 9.0; b(1, 1) = 10.0;
+    b(2, 0) = 11.0; b(2, 1) = 12.0;
+
+    MatD c = matrix_dot(a, b);
+    CHECK(c.rows == 2);
+    CHECK(c.cols == 2);
+
+    CHECK(c(0, 0) == doctest::Approx(58.0));
+    CHECK(c(0, 1) == doctest::Approx(64.0));
+    CHECK(c(1, 0) == doctest::Approx(139.0));
+    CHECK(c(1, 1) == doctest::Approx(154.0));
 }
 
-TEST_CASE("mean throws on empty vector")
+TEST_CASE("matrix_dot throws on empty matrices")
 {
-    VecD v;
-    CHECK_THROWS_AS(mean(v), runtime_error);
+    MatD a;
+    MatD b(1, 1, 1.0);
+    CHECK_THROWS_WITH_AS(matrix_dot(a, b),
+                         "matrix_dot: matrices must not be empty",
+                         runtime_error);
+
+    MatD c(1, 1, 1.0);
+    MatD d;
+    CHECK_THROWS_WITH_AS(matrix_dot(c, d),
+                         "matrix_dot: matrices must not be empty",
+                         runtime_error);
+}
+
+TEST_CASE("matrix_dot throws on incompatible shapes")
+{
+    MatD a(2, 3);
+    MatD b(4, 1);
+    CHECK_THROWS_WITH_AS(matrix_dot(a, b),
+                         "matrix_dot: incompatible shapes",
+                         runtime_error);
+}
+
+// print vector test
+TEST_CASE("print_vector writes expected output")
+{
+    std::ostringstream oss;
+    auto* old_buf = cout.rdbuf(oss.rdbuf());
+
+    VecD v = {1.0, 2.5, -3.0};
+    print_vector(v);
+
+    cout.rdbuf(old_buf);
+
+    CHECK(oss.str() == "1 2.5 -3\n");
 }
 
 // classification_accuracy tests
@@ -174,14 +180,18 @@ TEST_CASE("classification_accuracy throws on sparse size mismatch")
 
     VecI targets = {0}; // mismatch
 
-    CHECK_THROWS_AS(classification_accuracy(preds, targets), runtime_error);
+    CHECK_THROWS_WITH_AS(classification_accuracy(preds, targets),
+                         "classification_accuracy: y_pred.rows must match y_true.size()",
+                         runtime_error);
 }
 
 TEST_CASE("classification_accuracy throws on sparse empty predictions")
 {
     MatD preds(1, 0);
     VecI targets = {0};
-    CHECK_THROWS_AS(classification_accuracy(preds, targets), runtime_error);
+    CHECK_THROWS_WITH_AS(classification_accuracy(preds, targets),
+                         "classification_accuracy: y_pred must be non-empty",
+                         runtime_error);
 }
 
 TEST_CASE("classification_accuracy throws on sparse class index out of range")
@@ -190,7 +200,9 @@ TEST_CASE("classification_accuracy throws on sparse class index out of range")
     preds(0, 0) = 0.5; preds(0, 1) = 0.5;
     VecI targets = {2}; // invalid class
 
-    CHECK_THROWS_AS(classification_accuracy(preds, targets), runtime_error);
+    CHECK_THROWS_WITH_AS(classification_accuracy(preds, targets),
+                         "classification_accuracy: class index out of range",
+                         runtime_error);
 }
 
 TEST_CASE("classification_accuracy computes correct value for one-hot labels")
@@ -216,14 +228,18 @@ TEST_CASE("classification_accuracy throws on one-hot shape mismatch")
     targets(0, 0) = 1.0;
     targets(1, 1) = 1.0;
 
-    CHECK_THROWS_AS(classification_accuracy(preds, targets), runtime_error);
+    CHECK_THROWS_WITH_AS(classification_accuracy(preds, targets),
+                         "classification_accuracy: y_pred and y_true must have the same shape",
+                         runtime_error);
 }
 
 TEST_CASE("classification_accuracy throws on one-hot empty predictions")
 {
     MatD preds(0, 0);
     MatD targets(0, 0);
-    CHECK_THROWS_AS(classification_accuracy(preds, targets), runtime_error);
+    CHECK_THROWS_WITH_AS(classification_accuracy(preds, targets),
+                         "classification_accuracy: y_pred must be non-empty",
+                         runtime_error);
 }
 
 // generate_spiral_data tests
@@ -263,8 +279,12 @@ TEST_CASE("generate_spiral_data throws on invalid arguments")
     MatD X;
     VecI y;
 
-    CHECK_THROWS_AS(generate_spiral_data(1, 3, X, y), runtime_error);
-    CHECK_THROWS_AS(generate_spiral_data(10, 0, X, y), runtime_error);
+    CHECK_THROWS_WITH_AS(generate_spiral_data(1, 3, X, y),
+                         "generate_spiral_data: invalid arguments",
+                         runtime_error);
+    CHECK_THROWS_WITH_AS(generate_spiral_data(10, 0, X, y),
+                         "generate_spiral_data: invalid arguments",
+                         runtime_error);
 }
 
 TEST_CASE("random_uniform produces values in unit interval")
@@ -279,13 +299,18 @@ TEST_CASE("random_uniform produces values in unit interval")
     CHECK(second < 1.0);
 }
 
+// generate_vertical_data tests
 TEST_CASE("generate_vertical_data throws on invalid arguments")
 {
     MatD X;
     VecI y;
 
-    CHECK_THROWS_AS(generate_vertical_data(0, 3, X, y), runtime_error);
-    CHECK_THROWS_AS(generate_vertical_data(5, 0, X, y), runtime_error);
+    CHECK_THROWS_WITH_AS(generate_vertical_data(0, 3, X, y),
+                         "generate_vertical_data: invalid arguments",
+                         runtime_error);
+    CHECK_THROWS_WITH_AS(generate_vertical_data(5, 0, X, y),
+                         "generate_vertical_data: invalid arguments",
+                         runtime_error);
 }
 
 TEST_CASE("generate_vertical_data fills samples with labels")
@@ -320,17 +345,24 @@ TEST_CASE("generate_vertical_data fills samples with labels")
     CHECK(max_y != min_y);
 }
 
+// plot_scatter_svg tests
 TEST_CASE("plot_scatter_svg validates inputs and paths")
 {
     MatD empty;
-    CHECK_THROWS_AS(plot_scatter_svg("unused.svg", empty), runtime_error);
+    CHECK_THROWS_WITH_AS(plot_scatter_svg("unused.svg", empty),
+                         "plot_scatter_svg: invalid input data",
+                         runtime_error);
 
     MatD wrong_cols(1, 1, 0.0);
-    CHECK_THROWS_AS(plot_scatter_svg("unused.svg", wrong_cols), runtime_error);
+    CHECK_THROWS_WITH_AS(plot_scatter_svg("unused.svg", wrong_cols),
+                         "plot_scatter_svg: invalid input data",
+                         runtime_error);
 
     MatD points(1, 2, 0.5);
     VecI labels = {0};
-    CHECK_THROWS_AS(plot_scatter_svg("/nonexistent_dir/plot.svg", points, labels), runtime_error);
+    CHECK_THROWS_WITH_AS(plot_scatter_svg("/nonexistent_dir/plot.svg", points, labels),
+                         "plot_scatter_svg: given path is invalid",
+                         runtime_error);
 }
 
 TEST_CASE("plot_scatter_svg writes circles with optional labels")
@@ -481,14 +513,18 @@ TEST_CASE("LayerDense forward throws when weights are empty")
     LayerDense layer(1, 1);
     layer.weights.assign(0, 0); // make weights empty
 
-    CHECK_THROWS_AS(layer.forward(inputs), runtime_error);
+    CHECK_THROWS_WITH_AS(layer.forward(inputs),
+                         "LayerDense::forward: weights must be initialized",
+                         runtime_error);
 }
 
 TEST_CASE("LayerDense forward throws on input/weight shape mismatch")
 {
     MatD inputs(1, 3);       // 1 x 3
     LayerDense layer(2, 2);  // expects 2 inputs
-    CHECK_THROWS_AS(layer.forward(inputs), runtime_error);
+    CHECK_THROWS_WITH_AS(layer.forward(inputs),
+                         "LayerDense::forward: inputs.cols must match weights.rows",
+                         runtime_error);
 }
 
 TEST_CASE("LayerDense forward throws on bias size mismatch")
@@ -496,7 +532,9 @@ TEST_CASE("LayerDense forward throws on bias size mismatch")
     MatD inputs(1, 2);
     LayerDense layer(2, 3);
     layer.biases = {1.0, 2.0}; // size 2, but weights.cols = 3
-    CHECK_THROWS_AS(layer.forward(inputs), runtime_error);
+    CHECK_THROWS_WITH_AS(layer.forward(inputs),
+                         "LayerDense::forward: biases.size() must match weights.cols",
+                         runtime_error);
 }
 
 TEST_CASE("LayerDense backward computes gradients")
@@ -542,7 +580,9 @@ TEST_CASE("LayerDense backward throws on shape mismatch")
     layer.forward(inputs);
 
     MatD bad_dvalues(1, 1, 0.0); // wrong number of columns
-    CHECK_THROWS_AS(layer.backward(bad_dvalues), runtime_error);
+    CHECK_THROWS_WITH_AS(layer.backward(bad_dvalues),
+                         "LayerDense::backward: dvalues shape mismatch",
+                         runtime_error);
 }
 
 // ActivationReLU tests
@@ -606,7 +646,9 @@ TEST_CASE("ActivationReLU backward throws on shape mismatch")
     activation.forward(inputs);
 
     MatD bad_dvalues(1, 2, 0.0);
-    CHECK_THROWS_AS(activation.backward(bad_dvalues), runtime_error);
+    CHECK_THROWS_WITH_AS(activation.backward(bad_dvalues),
+                         "ActivationReLU::backward: dvalues shape mismatch",
+                         runtime_error);
 }
 
 // ActivationSoftmax tests
@@ -661,7 +703,9 @@ TEST_CASE("ActivationSoftmax throws when exponentials sum is non-finite")
     MatD inputs(1, 1);
     inputs(0, 0) = -std::numeric_limits<double>::infinity();
     ActivationSoftmax activation;
-    CHECK_THROWS_AS(activation.forward(inputs), runtime_error);
+    CHECK_THROWS_WITH_AS(activation.forward(inputs),
+                         "ActivationSoftmax: invalid sum of exponentials",
+                         runtime_error);
 }
 
 TEST_CASE("ActivationSoftmax backward computes gradients")
@@ -690,7 +734,9 @@ TEST_CASE("ActivationSoftmax backward throws on shape mismatch")
     activation.forward(inputs);
 
     MatD bad_dvalues(2, 2, 0.0); // wrong number of rows
-    CHECK_THROWS_AS(activation.backward(bad_dvalues), runtime_error);
+    CHECK_THROWS_WITH_AS(activation.backward(bad_dvalues),
+                         "ActivationSoftmax::backward: dvalues shape mismatch",
+                         runtime_error);
 }
 
 // LossCategoricalCrossEntropy tests
@@ -769,7 +815,21 @@ TEST_CASE("LossCategoricalCrossEntropy throws on sparse label count mismatch")
     VecI targets = {0}; // size mismatch vs preds.rows
 
     LossCategoricalCrossEntropy loss;
-    CHECK_THROWS_AS(loss.calculate(preds, targets), runtime_error);
+    CHECK_THROWS_WITH_AS(loss.calculate(preds, targets),
+                         "LossCategoricalCrossEntropy: y_pred.rows must match y_true.size()",
+                         runtime_error);
+}
+
+TEST_CASE("LossCategoricalCrossEntropy mean_sample_losses throws on zero samples")
+{
+    MatD preds;
+    preds.assign(0, 2, 0.0);
+    VecI targets;
+
+    LossCategoricalCrossEntropy loss;
+    CHECK_THROWS_WITH_AS(loss.calculate(preds, targets),
+                         "Loss::mean_sample_losses: sample_losses must contain at least one element",
+                         runtime_error);
 }
 
 TEST_CASE("LossCategoricalCrossEntropy throws on sparse label out of range")
@@ -779,7 +839,9 @@ TEST_CASE("LossCategoricalCrossEntropy throws on sparse label out of range")
     VecI targets = {2}; // invalid index
 
     LossCategoricalCrossEntropy loss;
-    CHECK_THROWS_AS(loss.calculate(preds, targets), runtime_error);
+    CHECK_THROWS_WITH_AS(loss.calculate(preds, targets),
+                         "LossCategoricalCrossEntropy: class index out of range",
+                         runtime_error);
 }
 
 TEST_CASE("LossCategoricalCrossEntropy throws on one-hot shape mismatch")
@@ -791,7 +853,9 @@ TEST_CASE("LossCategoricalCrossEntropy throws on one-hot shape mismatch")
     MatD targets(1, 2, 0.0); // mismatched rows
 
     LossCategoricalCrossEntropy loss;
-    CHECK_THROWS_AS(loss.calculate(preds, targets), runtime_error);
+    CHECK_THROWS_WITH_AS(loss.calculate(preds, targets),
+                         "LossCategoricalCrossEntropy: y_pred and y_true must have the same shape",
+                         runtime_error);
 }
 
 TEST_CASE("LossCategoricalCrossEntropy backward (sparse) clamps probabilities")
@@ -835,7 +899,9 @@ TEST_CASE("LossCategoricalCrossEntropy backward throws on sparse shape mismatch"
     VecI targets = {0, 1}; // size mismatch
 
     LossCategoricalCrossEntropy loss;
-    CHECK_THROWS_AS(loss.backward(preds, targets), runtime_error);
+    CHECK_THROWS_WITH_AS(loss.backward(preds, targets),
+                         "LossCategoricalCrossEntropy::backward: dvalues.rows must match y_true.size()",
+                         runtime_error);
 }
 
 TEST_CASE("LossCategoricalCrossEntropy backward throws on zero samples sparse path")
@@ -845,7 +911,9 @@ TEST_CASE("LossCategoricalCrossEntropy backward throws on zero samples sparse pa
     VecI targets;
 
     LossCategoricalCrossEntropy loss;
-    CHECK_THROWS_AS(loss.backward(preds, targets), runtime_error);
+    CHECK_THROWS_WITH_AS(loss.backward(preds, targets),
+                         "LossCategoricalCrossEntropy::backward: dvalues must contain at least one sample",
+                         runtime_error);
 }
 
 TEST_CASE("LossCategoricalCrossEntropy backward throws on sparse class out of range")
@@ -854,7 +922,9 @@ TEST_CASE("LossCategoricalCrossEntropy backward throws on sparse class out of ra
     VecI targets = {1}; // invalid index
 
     LossCategoricalCrossEntropy loss;
-    CHECK_THROWS_AS(loss.backward(preds, targets), runtime_error);
+    CHECK_THROWS_WITH_AS(loss.backward(preds, targets),
+                         "LossCategoricalCrossEntropy::backward: class index out of range",
+                         runtime_error);
 }
 
 TEST_CASE("LossCategoricalCrossEntropy backward throws on one-hot shape mismatch")
@@ -863,7 +933,9 @@ TEST_CASE("LossCategoricalCrossEntropy backward throws on one-hot shape mismatch
     MatD targets(2, 2, 0.0); // mismatched rows
 
     LossCategoricalCrossEntropy loss;
-    CHECK_THROWS_AS(loss.backward(preds, targets), runtime_error);
+    CHECK_THROWS_WITH_AS(loss.backward(preds, targets),
+                         "LossCategoricalCrossEntropy::backward: shapes of dvalues and y_true must match",
+                         runtime_error);
 }
 
 TEST_CASE("LossCategoricalCrossEntropy backward throws on zero samples one-hot path")
@@ -874,7 +946,9 @@ TEST_CASE("LossCategoricalCrossEntropy backward throws on zero samples one-hot p
     targets.assign(0, 2, 0.0);
 
     LossCategoricalCrossEntropy loss;
-    CHECK_THROWS_AS(loss.backward(preds, targets), runtime_error);
+    CHECK_THROWS_WITH_AS(loss.backward(preds, targets),
+                         "LossCategoricalCrossEntropy::backward: dvalues must contain at least one sample",
+                         runtime_error);
 }
 
 // Combined softmax + cross-entropy tests
@@ -946,7 +1020,9 @@ TEST_CASE("ActivationSoftmaxLossCategoricalCrossEntropy backward throws on spars
     combo.forward(logits, y_true);
 
     MatD bad_dvalues(1, 2, 0.0); // wrong number of rows
-    CHECK_THROWS_AS(combo.backward(bad_dvalues, y_true), runtime_error);
+    CHECK_THROWS_WITH_AS(combo.backward(bad_dvalues, y_true),
+                         "ActivationSoftmaxLossCategoricalCrossEntropy::backward: dvalues.rows must match y_true.size()",
+                         runtime_error);
 }
 
 TEST_CASE("ActivationSoftmaxLossCategoricalCrossEntropy backward throws on invalid sparse class index")
@@ -955,7 +1031,9 @@ TEST_CASE("ActivationSoftmaxLossCategoricalCrossEntropy backward throws on inval
     VecI bad_labels = {3}; // out of range for 2 classes
 
     ActivationSoftmaxLossCategoricalCrossEntropy combo;
-    CHECK_THROWS_AS(combo.backward(dvalues, bad_labels), runtime_error);
+    CHECK_THROWS_WITH_AS(combo.backward(dvalues, bad_labels),
+                         "ActivationSoftmaxLossCategoricalCrossEntropy::backward: class index out of range",
+                         runtime_error);
 }
 
 TEST_CASE("ActivationSoftmaxLossCategoricalCrossEntropy backward throws on one-hot shape mismatch")
@@ -964,5 +1042,7 @@ TEST_CASE("ActivationSoftmaxLossCategoricalCrossEntropy backward throws on one-h
     MatD y_true(2, 2, 0.0); // mismatched rows
 
     ActivationSoftmaxLossCategoricalCrossEntropy combo;
-    CHECK_THROWS_AS(combo.backward(dvalues, y_true), runtime_error);
+    CHECK_THROWS_WITH_AS(combo.backward(dvalues, y_true),
+                         "ActivationSoftmaxLossCategoricalCrossEntropy::backward: shapes of dvalues and y_true must match",
+                         runtime_error);
 }

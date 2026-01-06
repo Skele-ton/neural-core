@@ -34,6 +34,38 @@ using std::is_same_v;
 using VecD = std::vector<double>;
 using VecI = std::vector<int>;
 
+void print_vector(const VecD& v)
+{
+    for (size_t i = 0; i < v.size(); ++i) {
+        cout << v[i];
+        if (i + 1 != v.size()) {
+            cout << ' ';
+        }
+    }
+    cout << '\n';
+}
+
+// TODO: Make rng implementation thread-safe
+
+// global RNG
+mt19937 g_rng(0);
+
+// each generated number is centered around 0 with a standard deviation of 1
+// unbounded - technically can be any value but it is more likely to be around 0
+double random_gaussian()
+{
+    static normal_distribution<double> dist(0.0, 1.0);
+    return dist(g_rng);
+}
+
+// generated numbers are in range [0, 1)
+// they are equally likely to be any value in that range
+double random_uniform()
+{
+    static uniform_real_distribution<double> uniform(0.0, 1.0);
+    return uniform(g_rng);
+}
+
 class Matrix
 {
 public:
@@ -58,6 +90,72 @@ public:
         return rows == 0 || cols == 0;
     }
 
+    void print() const
+    {
+        for (size_t i = 0; i < rows; ++i) {
+            for (size_t j = 0; j < cols; ++j) {
+                cout << (*this)(i, j);
+                if (j + 1 != cols) {
+                    cout << ' ';
+                }
+            }
+            cout << '\n';
+        }
+    }
+
+    Matrix transpose() const
+    {
+        if (is_empty()) {
+            return Matrix();
+        }
+
+        Matrix result(cols, rows);
+
+        for (size_t i = 0; i < rows; ++i) {
+            for (size_t j = 0; j < cols; ++j) {
+                result(j, i) = (*this)(i, j);
+            }
+        }
+
+        return result;
+    }
+
+    Matrix clip(double min_value, double max_value) const
+    {
+        if (min_value > max_value) {
+            throw runtime_error("clip: min_value must not exceed max_value");
+        }
+
+        Matrix result(rows, cols);
+        for (size_t i = 0; i < rows; ++i) {
+            for (size_t j = 0; j < cols; ++j) {
+                double v = (*this)(i, j);
+                if (v < min_value) {
+                    v = min_value;
+                } else if (v > max_value) {
+                    v = max_value;
+                }
+                result(i, j) = v;
+            }
+        }
+
+        return result;
+    }
+
+    void scale_by_scalar(size_t samples)
+    {
+        if (samples == 0) {
+            throw runtime_error("scale_by_scalar: samples must be bigger than 0");
+        }
+
+        const double inv = 1.0 / static_cast<double>(samples);
+        for (size_t i = 0; i < rows; ++i) {
+            for (size_t j = 0; j < cols; ++j) {
+                (*this)(i, j) *= inv;
+            }
+        }
+    }
+
     double& operator()(size_t r, size_t c)
     {
         return data[r * cols + c];
@@ -71,60 +169,14 @@ public:
 
 using MatD = Matrix;
 
-void print_vector(const VecD& v)
-{
-    for (size_t i = 0; i < v.size(); ++i) {
-        cout << v[i];
-        if (i + 1 != v.size()) {
-            cout << ' ';
-        }
-    }
-    cout << '\n';
-}
-
-void print_matrix(const MatD& m)
-{
-    for (size_t i = 0; i < m.rows; ++i) {
-        for (size_t j = 0; j < m.cols; ++j) {
-            cout << m(i, j);
-            if (j + 1 != m.cols) {
-                cout << ' ';
-            }
-        }
-        cout << '\n';
-    }
-}
-
-// TODO: Make rng implementation thread-safe
-
-// global RNG
-mt19937 g_rng(0);
-
-// each generated number is centered around 0 with a standard deviation of 1
-// unbounded - technically can be any value but it is more likely to be around 0
-double random_gaussian()
-{
-    static normal_distribution<double> dist(0.0, 1.0);
-    return dist(g_rng);
-}
-
-// generated numbers are in range [0, 1)
-// they are equally likely to be any value in that range
-double random_uniform()
-{
-    static uniform_real_distribution<double> uniform(0.0, 1.0);
-    return uniform(g_rng);
-}
-
-// math
-MatD matmul(const MatD& a, const MatD& b)
+MatD matrix_dot(const MatD& a, const MatD& b)
 {
     if (a.is_empty() || b.is_empty()) {
-        throw runtime_error("matmul: matrices must not be empty");
+        throw runtime_error("matrix_dot: matrices must not be empty");
     }
 
     if (a.cols != b.rows) {
-        throw runtime_error("matmul: incompatible shapes");
+        throw runtime_error("matrix_dot: incompatible shapes");
     }
 
     MatD result(a.rows, b.cols, 0.0);
@@ -139,73 +191,6 @@ MatD matmul(const MatD& a, const MatD& b)
     }
 
     return result;
-}
-
-MatD transpose(const MatD& m)
-{
-    if (m.is_empty()) {
-        return MatD();
-    }
-
-    MatD result(m.cols, m.rows);
-
-    for (size_t i = 0; i < m.rows; ++i) {
-        for (size_t j = 0; j < m.cols; ++j) {
-            result(j, i) = m(i, j);
-        }
-    }
-
-    return result;
-}
-
-MatD clip_matrix(const MatD& m, double min_value, double max_value)
-{
-    if (min_value > max_value) {
-        throw runtime_error("clip_matrix: min_value must not exceed max_value");
-    }
-
-    MatD result(m.rows, m.cols);
-    for (size_t i = 0; i < m.rows; ++i) {
-        for (size_t j = 0; j < m.cols; ++j) {
-            double v = m(i, j);
-            if (v < min_value) {
-                v = min_value;
-            } else if (v > max_value) {
-                v = max_value;
-            }
-            result(i, j) = v;
-        }
-    }
-
-    return result;
-}
-
-inline void scale_by_samples(MatD& m, size_t samples)
-{
-    if (samples == 0) {
-        throw runtime_error("scale_by_samples: samples must be bigger than 0");
-    }
-
-    const double inv = 1.0 / static_cast<double>(samples);
-    for (size_t i = 0; i < m.rows; ++i) {
-        for (size_t j = 0; j < m.cols; ++j) {
-            m(i, j) *= inv;
-        }
-    }
-}
-
-double mean(const VecD& values)
-{
-    if (values.empty()) {
-        throw runtime_error("mean: cannot compute mean of empty vector");
-    }
-
-    double sum = 0.0;
-    for (double v : values) {
-        sum += v;
-    }
-
-    return sum / static_cast<double>(values.size());
 }
 
 // accuracy for sparse and one-hot labels
@@ -477,7 +462,7 @@ public:
             throw runtime_error("LayerDense::forward: biases.size() must match weights.cols");
         }
 
-        output = matmul(inputs, weights);
+        output = matrix_dot(inputs, weights);
         for (size_t i = 0; i < output.rows; ++i) {
             for (size_t j = 0; j < output.cols; ++j) {
                 output(i, j) += biases[j];
@@ -491,8 +476,8 @@ public:
             throw runtime_error("LayerDense::backward: dvalues shape mismatch");
         }
 
-        MatD inputs_T = transpose(inputs);
-        dweights = matmul(inputs_T, dvalues);
+        MatD inputs_T = inputs.transpose();
+        dweights = matrix_dot(inputs_T, dvalues);
 
         dbiases.assign(weights.cols, 0.0);
         for (size_t i = 0; i < dvalues.rows; ++i) {
@@ -501,8 +486,8 @@ public:
             }
         }
 
-        MatD weights_T = transpose(weights);
-        dinputs = matmul(dvalues, weights_T);
+        MatD weights_T = weights.transpose();
+        dinputs = matrix_dot(dvalues, weights_T);
     }
 };
 
@@ -623,10 +608,24 @@ public:
             "Loss::calculate: y_true must be VecI (sparse) or MatD (one-hot)");
 
         VecD sample_losses = forward(output, y_true);
-        return mean(sample_losses);
+        return mean_sample_losses(sample_losses);
     }
 
 protected:
+    static double mean_sample_losses(const VecD& sample_losses)
+    {
+        if (sample_losses.empty()) {
+            throw runtime_error("Loss::mean_sample_losses: sample_losses must contain at least one element");
+        }
+
+        double sum = 0.0;
+        for (double sample_loss : sample_losses) {
+            sum += sample_loss;
+        }
+
+        return sum / static_cast<double>(sample_losses.size());
+    }
+
     virtual VecD forward(const MatD& output, const VecI& y_true) const = 0;
     virtual VecD forward(const MatD& output, const MatD& y_true) const = 0;
 };
@@ -643,7 +642,7 @@ public:
             throw runtime_error("LossCategoricalCrossEntropy: y_pred.rows must match y_true.size()");
         }
 
-        MatD clipped = clip_matrix(y_pred, 1e-7, 1.0 - 1e-7);
+        MatD clipped = y_pred.clip(1e-7, 1.0 - 1e-7);
         VecD losses(y_pred.rows, 0.0);
 
         for (size_t i = 0; i < y_pred.rows; ++i) {
@@ -666,7 +665,7 @@ public:
             throw runtime_error("LossCategoricalCrossEntropy: y_pred and y_true must have the same shape");
         }
 
-        MatD clipped = clip_matrix(y_pred, 1e-7, 1.0 - 1e-7);
+        MatD clipped = y_pred.clip(1e-7, 1.0 - 1e-7);
         VecD losses(y_pred.rows, 0.0);
 
         for (size_t i = 0; i < y_pred.rows; ++i) {
@@ -711,7 +710,7 @@ public:
             dinputs(i, c) = -1.0 / p;
         }
 
-        scale_by_samples(dinputs, samples);
+        dinputs.scale_by_scalar(samples);
     }
 
     // one-hot labels
@@ -740,7 +739,7 @@ public:
             }
         }
 
-        scale_by_samples(dinputs, samples);
+        dinputs.scale_by_scalar(samples);
     }
 
 private:
@@ -792,7 +791,7 @@ public:
             dinputs(i, static_cast<size_t>(class_idx)) -= 1.0;
         }
 
-        scale_by_samples(dinputs, samples);
+        dinputs.scale_by_scalar(samples);
     }
 
     // one-hot labels (turns them into sparse and then calls the other backward method)
@@ -863,11 +862,11 @@ int main()
     dense1.backward(activation1.dinputs);
 
     cout << "dense1.dweights:\n";
-    print_matrix(dense1.dweights);
+    dense1.dweights.print();
     cout << "dense1.dbiases:\n";
     print_vector(dense1.dbiases);
     cout << "dense2.dweights:\n";
-    print_matrix(dense2.dweights);
+    dense2.dweights.print();
     cout << "dense2.dbiases:\n";
     print_vector(dense2.dbiases);
 
