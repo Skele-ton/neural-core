@@ -12,7 +12,7 @@ GCOVR ?= gcovr
 GCOVR_EXCLUDES := --exclude 'doctest.h'
 COVERAGE_FLAGS := -O0 -g --coverage
 
-.PHONY: all run test clean coverage all-in-one
+.PHONY: all run test coverage all-in-one clean clean-coverage
 
 all: $(APP)
 
@@ -28,14 +28,18 @@ run: $(APP)
 test: $(TEST_BIN)
 	./$(TEST_BIN)
 
-coverage: clean
+coverage: clean-coverage
 	$(MAKE) CXXFLAGS="$(filter-out -O%,$(CXXFLAGS)) $(COVERAGE_FLAGS)" LDFLAGS="$(LDFLAGS)" $(TEST_BIN)
 	./$(TEST_BIN)
 	PATH="$$HOME/.local/bin:$$PATH" $(GCOVR) -r . $(GCOVR_EXCLUDES)
+	rm -f *.gcda *.gcno
 
 all-in-one: run test coverage
 	@echo "Completed run, test, coverage"
 
-clean:
-	rm -f $(APP) $(TEST_BIN)
-	rm -f *.gcda *.gcno coverage.txt
+clean: clean-coverage
+	rm -f $(APP)
+
+clean-coverage:
+	rm -f $(TEST_BIN)
+	rm -f *.gcda *.gcno *.gcov coverage.txt coverage.html coverage.xml coverage.json

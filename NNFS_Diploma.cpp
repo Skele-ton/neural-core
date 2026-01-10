@@ -24,6 +24,8 @@ using std::fixed;
 using std::setprecision;
 using std::min;
 using std::max;
+using std::sqrt;
+using std::pow;
 using std::sin;
 using std::cos;
 using std::exp;
@@ -430,6 +432,10 @@ class LayerDense
 public:
     MatD weights;
     VecD biases;
+    MatD weight_momentums;
+    VecD bias_momentums;
+    MatD weight_cache;
+    VecD bias_cache;
     MatD output;
     MatD inputs;
     MatD dweights;
@@ -479,7 +485,7 @@ public:
         MatD inputs_T = inputs.transpose();
         dweights = matrix_dot(inputs_T, dvalues);
 
-        dbiases.assign(weights.cols, 0.0);
+        dbiases.assign(biases.size(), 0.0);
         for (size_t i = 0; i < dvalues.rows; ++i) {
             for (size_t j = 0; j < dvalues.cols; ++j) {
                 dbiases[j] += dvalues(i, j);
@@ -595,7 +601,231 @@ public:
     }
 };
 
-// loss
+// optimizers
+class Optimizer
+{
+public:
+    double learning_rate;
+    double current_learning_rate;
+    double decay;
+    size_t iterations;
+
+    Optimizer(double learning_rate, double decay)
+        : learning_rate(learning_rate),
+          current_learning_rate(learning_rate),
+          decay(decay),
+          iterations(0)
+    {
+    }
+
+    virtual ~Optimizer() = default;
+
+    void pre_update_params()
+    {
+        current_learning_rate = learning_rate;
+        if (decay != 0.0) {
+            current_learning_rate = learning_rate / (1.0 + decay * static_cast<double>(iterations));
+        }
+    }
+
+    void post_update_params()
+    {
+        ++iterations;
+    }
+
+    virtual void update_params(LayerDense& layer) = 0;
+};
+
+// SGD optimizer
+class OptimizerSGD : public Optimizer
+{
+public:
+    double momentum;
+
+    OptimizerSGD(double learning_rate = 1.0, double decay = 0.0, double momentum = 0.0)
+        : Optimizer(learning_rate, decay),
+          momentum(momentum)
+    {
+    }
+
+    void update_params(LayerDense& layer) override
+    {
+        if (momentum == 0.0) {
+            for (size_t i = 0; i < layer.weights.rows; ++i) {
+                for (size_t j = 0; j < layer.weights.cols; ++j) {
+                    layer.weights(i, j) += -current_learning_rate * layer.dweights(i, j);
+                }
+            }
+            for (size_t j = 0; j < layer.biases.size(); ++j) {
+                layer.biases[j] += -current_learning_rate * layer.dbiases[j];
+            }
+        } else {
+            if (layer.weight_momentums.rows != layer.weights.rows || layer.weight_momentums.cols != layer.weights.cols) {
+                layer.weight_momentums.assign(layer.weights.rows, layer.weights.cols, 0.0);
+            }
+            if (layer.bias_momentums.size() != layer.biases.size()) {
+                layer.bias_momentums.assign(layer.biases.size(), 0.0);
+            }
+
+            for (size_t i = 0; i < layer.weights.rows; ++i) {
+                for (size_t j = 0; j < layer.weights.cols; ++j) {
+                    const double temp = momentum * layer.weight_momentums(i, j) -
+                                        current_learning_rate * layer.dweights(i, j);
+                    layer.weight_momentums(i, j) = temp;
+                    layer.weights(i, j) += temp;
+                }
+            }
+
+            for (size_t j = 0; j < layer.biases.size(); ++j) {
+                const double temp = momentum * layer.bias_momentums[j] - current_learning_rate * layer.dbiases[j];
+                layer.bias_momentums[j] = temp;
+                layer.biases[j] += temp;
+            }
+        }
+    }
+};
+
+// Adagrad optimizer
+class OptimizerAdagrad : public Optimizer
+{
+public:
+    double epsilon;
+
+    OptimizerAdagrad(double learning_rate = 1.0, double decay = 0.0, double epsilon = 1e-7)
+        : Optimizer(learning_rate, decay),
+          epsilon(epsilon)
+    {
+    }
+
+    void update_params(LayerDense& layer) override
+    {
+        if (layer.weight_cache.rows != layer.weights.rows || layer.weight_cache.cols != layer.weights.cols) {
+            layer.weight_cache.assign(layer.weights.rows, layer.weights.cols, 0.0);
+        }
+        if (layer.bias_cache.size() != layer.biases.size()) {
+            layer.bias_cache.assign(layer.biases.size(), 0.0);
+        }
+
+        for (size_t i = 0; i < layer.weights.rows; ++i) {
+            for (size_t j = 0; j < layer.weights.cols; ++j) {
+                layer.weight_cache(i, j) += layer.dweights(i, j) * layer.dweights(i, j);
+                layer.weights(i, j) += -current_learning_rate * layer.dweights(i, j) /
+                                       (sqrt(layer.weight_cache(i, j)) + epsilon);
+            }
+        }
+
+        for (size_t j = 0; j < layer.biases.size(); ++j) {
+            layer.bias_cache[j] += layer.dbiases[j] * layer.dbiases[j];
+            layer.biases[j] += -current_learning_rate * layer.dbiases[j] / (sqrt(layer.bias_cache[j]) + epsilon);
+        }
+    }
+};
+
+// RMSprop optimizer
+class OptimizerRMSprop : public Optimizer
+{
+public:
+    double epsilon;
+    double rho;
+
+    OptimizerRMSprop(double learning_rate = 0.001, double decay = 0.0, double epsilon = 1e-7, double rho = 0.9)
+        : Optimizer(learning_rate, decay),
+          epsilon(epsilon),
+          rho(rho)
+    {
+    }
+
+    void update_params(LayerDense& layer) override
+    {
+        if (layer.weight_cache.rows != layer.weights.rows || layer.weight_cache.cols != layer.weights.cols) {
+            layer.weight_cache.assign(layer.weights.rows, layer.weights.cols, 0.0);
+        }
+        if (layer.bias_cache.size() != layer.biases.size()) {
+            layer.bias_cache.assign(layer.biases.size(), 0.0);
+        }
+
+        for (size_t i = 0; i < layer.weights.rows; ++i) {
+            for (size_t j = 0; j < layer.weights.cols; ++j) {
+                layer.weight_cache(i, j) = rho * layer.weight_cache(i, j) +
+                                           (1.0 - rho) * layer.dweights(i, j) * layer.dweights(i, j);
+                layer.weights(i, j) += -current_learning_rate * layer.dweights(i, j) /
+                                       (sqrt(layer.weight_cache(i, j)) + epsilon);
+            }
+        }
+
+        for (size_t j = 0; j < layer.biases.size(); ++j) {
+            layer.bias_cache[j] = rho * layer.bias_cache[j] + (1.0 - rho) * layer.dbiases[j] * layer.dbiases[j];
+            layer.biases[j] += -current_learning_rate * layer.dbiases[j] / (sqrt(layer.bias_cache[j]) + epsilon);
+        }
+    }
+};
+
+// Adam optimizer
+class OptimizerAdam : public Optimizer
+{
+public:
+    double epsilon;
+    double beta1;
+    double beta2;
+
+    OptimizerAdam(double learning_rate = 0.001, double decay = 0.0, double epsilon = 1e-7,
+                  double beta1 = 0.9, double beta2 = 0.999)
+        : Optimizer(learning_rate, decay),
+          epsilon(epsilon),
+          beta1(beta1),
+          beta2(beta2)
+    {
+    }
+
+    void update_params(LayerDense& layer) override
+    {
+        if (layer.weight_momentums.rows != layer.weights.rows || layer.weight_momentums.cols != layer.weights.cols) {
+            layer.weight_momentums.assign(layer.weights.rows, layer.weights.cols, 0.0);
+        }
+        if (layer.weight_cache.rows != layer.weights.rows || layer.weight_cache.cols != layer.weights.cols) {
+            layer.weight_cache.assign(layer.weights.rows, layer.weights.cols, 0.0);
+        }
+        if (layer.bias_momentums.size() != layer.biases.size()) {
+            layer.bias_momentums.assign(layer.biases.size(), 0.0);
+        }
+        if (layer.bias_cache.size() != layer.biases.size()) {
+            layer.bias_cache.assign(layer.biases.size(), 0.0);
+        }
+
+        const double correction_applied_to_momentum = 1.0 - pow(beta1, static_cast<double>(iterations + 1));
+        const double correction_applied_to_cache = 1.0 - pow(beta2, static_cast<double>(iterations + 1));
+
+        for (size_t i = 0; i < layer.weights.rows; ++i) {
+            for (size_t j = 0; j < layer.weights.cols; ++j) {
+                layer.weight_momentums(i, j) = beta1 * layer.weight_momentums(i, j) +
+                                               (1.0 - beta1) * layer.dweights(i, j);
+                layer.weight_cache(i, j) = beta2 * layer.weight_cache(i, j) +
+                                           (1.0 - beta2) * layer.dweights(i, j) * layer.dweights(i, j);
+
+                const double weight_momentum_corrected = layer.weight_momentums(i, j) / correction_applied_to_momentum;
+                const double weight_cache_corrected = layer.weight_cache(i, j) / correction_applied_to_cache;
+
+                layer.weights(i, j) += -current_learning_rate * weight_momentum_corrected /
+                                       (sqrt(weight_cache_corrected) + epsilon);
+            }
+        }
+
+        for (size_t j = 0; j < layer.biases.size(); ++j) {
+            layer.bias_momentums[j] = beta1 * layer.bias_momentums[j] +
+                                      (1.0 - beta1) * layer.dbiases[j];
+            layer.bias_cache[j] = beta2 * layer.bias_cache[j] +
+                                  (1.0 - beta2) * layer.dbiases[j] * layer.dbiases[j];
+
+            const double bias_momentum_corrected = layer.bias_momentums[j] / correction_applied_to_momentum;
+            const double bias_cache_corrected = layer.bias_cache[j] / correction_applied_to_cache;
+
+            layer.biases[j] += -current_learning_rate * bias_momentum_corrected /
+                               (sqrt(bias_cache_corrected) + epsilon);
+        }
+    }
+};
+
+// loss functions
 class Loss
 {
 public:
@@ -826,49 +1056,44 @@ int main()
     MatD X;
     VecI y;
     generate_spiral_data(100, 3, X, y);
+    plot_scatter_svg("plot.svg", X, y);
+    cout << "Saved scatter plot to plot.svg\n";
 
-    LayerDense dense1(2, 3);
+    LayerDense dense1(2, 64);
     ActivationReLU activation1;
-    LayerDense dense2(3, 3);
+    LayerDense dense2(64, 3);
     ActivationSoftmaxLossCategoricalCrossEntropy loss_activation;
+    OptimizerAdam optimizer(0.05, 5e-7);
 
-    dense1.forward(X);
-    activation1.forward(dense1.output);
-    dense2.forward(activation1.output);
-    double loss = loss_activation.forward(dense2.output, y);
+    cout << fixed << setprecision(3);
 
-    cout << fixed << setprecision(6);
+    for (size_t epoch = 0; epoch <= 10000; ++epoch) {
+        dense1.forward(X);
+        activation1.forward(dense1.output);
+        dense2.forward(activation1.output);
 
-    const size_t samples_to_show = min<size_t>(5, loss_activation.output.rows);
-    cout << "First " << samples_to_show << " outputs:\n";
-    for (size_t i = 0; i < samples_to_show; ++i) {
-        for (size_t j = 0; j < loss_activation.output.cols; ++j) {
-            cout << loss_activation.output(i, j);
-            if (j + 1 != loss_activation.output.cols) {
-                cout << ' ';
-            }
+        double loss = loss_activation.forward(dense2.output, y);
+        double accuracy = classification_accuracy(loss_activation.output, y);
+
+        if (epoch % 100 == 0) {
+            cout << "epoch: " << epoch
+                 << ", acc: " << accuracy
+                 << ", loss: " << loss
+                 << ", learning_rate: " << setprecision(10) << optimizer.current_learning_rate
+                 << setprecision(3)
+                 << '\n';
         }
-        cout << '\n';
+
+        loss_activation.backward(loss_activation.output, y);
+        dense2.backward(loss_activation.dinputs);
+        activation1.backward(dense2.dinputs);
+        dense1.backward(activation1.dinputs);
+
+        optimizer.pre_update_params();
+        optimizer.update_params(dense1);
+        optimizer.update_params(dense2);
+        optimizer.post_update_params();
     }
-
-    cout << "loss: " << loss << '\n';
-
-    double acc = classification_accuracy(loss_activation.output, y);
-    cout << "acc: " << acc << '\n';
-
-    loss_activation.backward(loss_activation.output, y);
-    dense2.backward(loss_activation.dinputs);
-    activation1.backward(dense2.dinputs);
-    dense1.backward(activation1.dinputs);
-
-    cout << "dense1.dweights:\n";
-    dense1.dweights.print();
-    cout << "dense1.dbiases:\n";
-    print_vector(dense1.dbiases);
-    cout << "dense2.dweights:\n";
-    dense2.dweights.print();
-    cout << "dense2.dbiases:\n";
-    print_vector(dense2.dbiases);
 
     return 0;
 }

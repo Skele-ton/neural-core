@@ -1046,3 +1046,126 @@ TEST_CASE("ActivationSoftmaxLossCategoricalCrossEntropy backward throws on one-h
                          "ActivationSoftmaxLossCategoricalCrossEntropy::backward: shapes of dvalues and y_true must match",
                          runtime_error);
 }
+
+// optimizer tests
+TEST_CASE("Optimizer adjusts learning rate with decay and tracks iterations")
+{
+    struct DummyOpt : Optimizer {
+        using Optimizer::Optimizer;
+        void update_params(LayerDense&) override {}
+    } opt(1.0, 0.5);
+
+    CHECK(opt.current_learning_rate == doctest::Approx(1.0));
+    CHECK(opt.iterations == 0);
+
+    opt.pre_update_params();
+    CHECK(opt.current_learning_rate == doctest::Approx(1.0));
+    opt.post_update_params();
+    CHECK(opt.iterations == 1);
+
+    opt.pre_update_params();
+    CHECK(opt.current_learning_rate == doctest::Approx(1.0 / (1.0 + 0.5 * 1.0)));
+    opt.post_update_params();
+    CHECK(opt.iterations == 2);
+
+    LayerDense dummy(1, 1);
+    opt.update_params(dummy); // exercise virtual override
+}
+
+TEST_CASE("OptimizerSGD updates weights with and without momentum")
+{
+    LayerDense layer(1, 1);
+    layer.weights(0, 0) = 1.0;
+    layer.biases[0] = 0.5;
+    layer.dweights.assign(1, 1);
+    layer.dbiases.assign(1, 0.0);
+    layer.dweights(0, 0) = 2.0;
+    layer.dbiases[0] = 1.0;
+
+    OptimizerSGD sgd_no_momentum(0.1, 0.0, 0.0);
+    sgd_no_momentum.update_params(layer);
+
+    CHECK(layer.weights(0, 0) == doctest::Approx(0.8));
+    CHECK(layer.biases[0] == doctest::Approx(0.4));
+
+    // With momentum
+    LayerDense layer_m(1, 1);
+    layer_m.weights(0, 0) = 1.0;
+    layer_m.biases[0] = 0.0;
+    layer_m.dweights.assign(1, 1);
+    layer_m.dbiases.assign(1, 0.0);
+    layer_m.dweights(0, 0) = 2.0;
+    layer_m.dbiases[0] = 1.0;
+
+    OptimizerSGD sgd_momentum(0.1, 0.0, 0.9);
+    sgd_momentum.update_params(layer_m);
+
+    CHECK(layer_m.weight_momentums.rows == 1);
+    CHECK(layer_m.weight_momentums.cols == 1);
+    CHECK(layer_m.weight_momentums(0, 0) == doctest::Approx(-0.2));
+    CHECK(layer_m.bias_momentums[0] == doctest::Approx(-0.1));
+    CHECK(layer_m.weights(0, 0) == doctest::Approx(0.8));
+    CHECK(layer_m.biases[0] == doctest::Approx(-0.1));
+}
+
+TEST_CASE("OptimizerAdagrad accumulates cache and scales updates")
+{
+    LayerDense layer(1, 1);
+    layer.weights(0, 0) = 1.0;
+    layer.biases[0] = 0.1;
+    layer.dweights.assign(1, 1);
+    layer.dbiases.assign(1, 0.0);
+    layer.dweights(0, 0) = 2.0;
+    layer.dbiases[0] = 3.0;
+
+    OptimizerAdagrad adagrad(1.0, 0.0, 1e-7);
+    adagrad.update_params(layer);
+
+    CHECK(layer.weight_cache(0, 0) == doctest::Approx(4.0));
+    CHECK(layer.bias_cache[0] == doctest::Approx(9.0));
+    CHECK(layer.weights(0, 0) == doctest::Approx(0.0).epsilon(1e-6));
+    CHECK(layer.biases[0] == doctest::Approx(-0.9).epsilon(1e-6));
+}
+
+TEST_CASE("OptimizerRMSprop applies exponential cache and updates")
+{
+    LayerDense layer(1, 1);
+    layer.weights(0, 0) = 1.0;
+    layer.biases[0] = 0.5;
+    layer.dweights.assign(1, 1);
+    layer.dbiases.assign(1, 0.0);
+    layer.dweights(0, 0) = 2.0;
+    layer.dbiases[0] = 1.0;
+
+    OptimizerRMSprop rms(1.0, 0.0, 1e-7, 0.5);
+    rms.update_params(layer);
+
+    CHECK(layer.weight_cache(0, 0) == doctest::Approx(2.0));
+    CHECK(layer.bias_cache[0] == doctest::Approx(0.5));
+    CHECK(layer.weights(0, 0) == doctest::Approx(-0.41421356).epsilon(1e-6));
+    CHECK(layer.biases[0] == doctest::Approx(-0.91421356).epsilon(1e-6));
+}
+
+TEST_CASE("OptimizerAdam updates momentums and caches with bias correction")
+{
+    LayerDense layer(1, 1);
+    layer.weights(0, 0) = 1.0;
+    layer.biases[0] = 0.0;
+    layer.dweights.assign(1, 1);
+    layer.dbiases.assign(1, 0.0);
+    layer.dweights(0, 0) = 2.0;
+    layer.dbiases[0] = 2.0;
+
+    OptimizerAdam adam(0.1, 0.0, 1e-7, 0.5, 0.5);
+    adam.update_params(layer);
+
+    // Stored (uncorrected) momentums/caches
+    CHECK(layer.weight_momentums(0, 0) == doctest::Approx(1.0));
+    CHECK(layer.weight_cache(0, 0) == doctest::Approx(2.0));
+    CHECK(layer.bias_momentums[0] == doctest::Approx(1.0));
+    CHECK(layer.bias_cache[0] == doctest::Approx(2.0));
+
+    // Corrected updates
+    CHECK(layer.weights(0, 0) == doctest::Approx(0.9).epsilon(1e-6));
+    CHECK(layer.biases[0] == doctest::Approx(-0.1).epsilon(1e-6));
+}
