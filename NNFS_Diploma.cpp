@@ -295,19 +295,12 @@ double binary_accuracy(const MatD& y_pred, const MatD& y_true)
     return static_cast<double>(correct) / static_cast<double>(samples * outputs);
 }
 
-// TODO: potentially seperate a part of this function into a function for calculating just the standard deviation
-// as standard deviation is the same for a dataset (and we're calculating it with only y_pred here).
-// There is no reason to calculate it over and over every epoch as it will always be the same value
-double regression_accuracy(const MatD& y_pred, const MatD& y_true, double precision_divisor)
-{
-    if (y_pred.rows != y_true.rows || y_pred.cols != y_true.cols) {
-        throw runtime_error("regression_accuracy: y_pred and y_true must have the same shape");
-    }
-    if (y_pred.rows == 0 || y_pred.cols == 0) {
-        throw runtime_error("regression_accuracy: inputs must be non-empty");
-    }
+double regression_accuracy_precision(const MatD& y_true, double precision_divisor) {
     if (precision_divisor <= 0.0) {
         throw runtime_error("regression_accuracy: precision_divisor must be positive");
+    }
+    if (y_true.rows == 0 || y_true.cols == 0) {
+        throw runtime_error("regression_accuracy_precision: y_true must be non-empty");
     }
 
     const size_t samples = y_true.rows;
@@ -333,16 +326,36 @@ double regression_accuracy(const MatD& y_pred, const MatD& y_true, double precis
     }
     var /= static_cast<double>(n);
 
-    // calculate the square root
+    // calculate standard deviation (the square root) of the variance
     const double standard_deviation = sqrt(var);
+    if (standard_deviation == 0.0) {
+        return 1e-7; // avoid zero precision; allow exact-match checks downstream
+    }
 
     // calculate accuracy
-    const double accuracy_precision = standard_deviation / precision_divisor;
+    return standard_deviation / precision_divisor;
+}
+
+double regression_accuracy(const MatD& y_pred, const MatD& y_true, double precision)
+{
+    if (y_pred.rows != y_true.rows || y_pred.cols != y_true.cols) {
+        throw runtime_error("regression_accuracy: y_pred and y_true must have the same shape");
+    }
+    if (y_pred.rows == 0 || y_pred.cols == 0) {
+        throw runtime_error("regression_accuracy: inputs must be non-empty");
+    }
+    if (precision <= 0.0) {
+        throw runtime_error("regression_accuracy: precision must be positive");
+    }
+    
+    const size_t samples = y_true.rows;
+    const size_t outputs = y_true.cols;
+    const size_t n = samples * outputs;
 
     size_t correct = 0;
     for (size_t i = 0; i < samples; ++i) {
         for (size_t j = 0; j < outputs; ++j) {
-            if (abs(y_pred(i, j) - y_true(i, j)) < accuracy_precision) {
+            if (abs(y_pred(i, j) - y_true(i, j)) < precision) {
                 ++correct;
             }
         }
@@ -1552,7 +1565,7 @@ int main()
     LossMeanSquaredError loss_function;
     OptimizerAdam optimizer(0.005, 1e-3);
 
-    const double accuracy_precision_divisor = 75;
+    const double accuracy_precision = regression_accuracy_precision(y, 75);
 
     cout << fixed << setprecision(5);
 
@@ -1570,7 +1583,7 @@ int main()
                           Loss::regularization_loss(dense3);
         double loss = data_loss + reg_loss;
 
-        double accuracy = regression_accuracy(activation3.output, y, accuracy_precision_divisor);
+        double accuracy = regression_accuracy(activation3.output, y, accuracy_precision);
 
         if (epoch % 100 == 0) {
             cout << "epoch: " << epoch
@@ -1608,7 +1621,7 @@ int main()
     activation3.forward(dense3.output);
 
     double test_loss = loss_function.calculate(activation3.output, y_test);
-    double test_accuracy = regression_accuracy(activation3.output, y_test, accuracy_precision_divisor);
+    double test_accuracy = regression_accuracy(activation3.output, y_test, accuracy_precision);
 
     cout << "validation, acc: " << test_accuracy
          << ", loss: " << test_loss

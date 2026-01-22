@@ -302,7 +302,37 @@ TEST_CASE("binary_accuracy throws when predictions have zero columns")
                          runtime_error);
 }
 
-TEST_CASE("regression_accuracy counts predictions within dynamic precision")
+// regression_accuracy_precision tests
+TEST_CASE("regression_accuracy_precision computes precision from target stddev")
+{
+    MatD targets(2, 1);
+    targets(0, 0) = 1.0;
+    targets(1, 0) = 3.0;
+
+    double precision = regression_accuracy_precision(targets, 10.0);
+    CHECK(precision == doctest::Approx(0.1)); // stddev 1.0 / 10
+}
+
+TEST_CASE("regression_accuracy_precision handles zero variance and validates inputs")
+{
+    MatD constant(3, 1, 5.0);
+    double precision = regression_accuracy_precision(constant, 5.0);
+    CHECK(precision == doctest::Approx(1e-7));
+
+    MatD empty;
+    empty.assign(0, 0, 0.0);
+    CHECK_THROWS_WITH_AS(regression_accuracy_precision(empty, 5.0),
+                         "regression_accuracy_precision: y_true must be non-empty",
+                         runtime_error);
+
+    MatD nonempty(1, 1, 0.0);
+    CHECK_THROWS_WITH_AS(regression_accuracy_precision(nonempty, 0.0),
+                         "regression_accuracy: precision_divisor must be positive",
+                         runtime_error);
+}
+
+// regression_accuracy tests
+TEST_CASE("regression_accuracy counts predictions within given precision")
 {
     MatD preds(2, 1);
     preds(0, 0) = 0.10; preds(1, 0) = 0.30;
@@ -310,8 +340,8 @@ TEST_CASE("regression_accuracy counts predictions within dynamic precision")
     MatD targets(2, 1);
     targets(0, 0) = 0.11; targets(1, 0) = 0.55;
 
-    double acc = regression_accuracy(preds, targets, 2.0);
-    CHECK(acc == doctest::Approx(0.5)); // standard_deviation / 2 ≈ 0.11, so only one value within range
+    double acc = regression_accuracy(preds, targets, 0.05); // only first sample within
+    CHECK(acc == doctest::Approx(0.5));
 }
 
 TEST_CASE("regression_accuracy throws on shape mismatch or invalid precision")
@@ -326,7 +356,7 @@ TEST_CASE("regression_accuracy throws on shape mismatch or invalid precision")
     MatD preds2(1, 1, 0.1);
     MatD targets2(1, 1, 0.1);
     CHECK_THROWS_WITH_AS(regression_accuracy(preds2, targets2, 0.0),
-                         "regression_accuracy: precision_divisor must be positive",
+                         "regression_accuracy: precision must be positive",
                          runtime_error);
 
     MatD empty_preds;
