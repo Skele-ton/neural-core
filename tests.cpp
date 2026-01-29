@@ -6,20 +6,6 @@
 #define NNFS_NO_MAIN
 #include "NNFS_Diploma.cpp"
 
-// print_vector test
-TEST_CASE("print_vector writes expected output")
-{
-    std::ostringstream oss;
-    auto* old_buf = cout.rdbuf(oss.rdbuf());
-
-    VecD v = {1.0, 2.5, -3.0};
-    print_vector(v);
-
-    cout.rdbuf(old_buf);
-
-    CHECK(oss.str() == "1 2.5 -3\n");
-}
-
 // random_uniform test
 TEST_CASE("random_uniform produces values in unit interval")
 {
@@ -36,7 +22,7 @@ TEST_CASE("random_uniform produces values in unit interval")
 //matrix tests
 TEST_CASE("Matrix basic operations")
 {
-    MatD m(2, 3, 1.5);
+    Matrix m(2, 3, 1.5);
     CHECK(m.rows == 2);
     CHECK(m.cols == 3);
     CHECK(m(0, 0) == doctest::Approx(1.5));
@@ -53,10 +39,10 @@ TEST_CASE("Matrix basic operations")
 
 TEST_CASE("Matrix empty and transpose on empty")
 {
-    MatD m;
+    Matrix m;
     CHECK(m.is_empty() == true);
 
-    MatD t = m.transpose();
+    Matrix t = m.transpose();
     CHECK(t.is_empty() == true);
 }
 
@@ -65,7 +51,7 @@ TEST_CASE("Matrix print writes expected output")
     std::ostringstream oss;
     auto* old_buf = cout.rdbuf(oss.rdbuf());
 
-    MatD m(2, 2);
+    Matrix m(2, 2);
     m(0, 0) = 1.0; m(0, 1) = 2.0;
     m(1, 0) = 3.0; m(1, 1) = 4.5;
     m.print();
@@ -77,11 +63,11 @@ TEST_CASE("Matrix print writes expected output")
 
 TEST_CASE("Matrix transpose swaps rows and columns and values")
 {
-    MatD m(2, 3);
+    Matrix m(2, 3);
     m(0, 0) = 1.0; m(0, 1) = 2.0; m(0, 2) = 3.0;
     m(1, 0) = 4.0; m(1, 1) = 5.0; m(1, 2) = 6.0;
 
-    MatD t = m.transpose();
+    Matrix t = m.transpose();
     CHECK(t.rows == 3);
     CHECK(t.cols == 2);
 
@@ -95,11 +81,11 @@ TEST_CASE("Matrix transpose swaps rows and columns and values")
 
 TEST_CASE("Matrix clip clamps values to bounds")
 {
-    MatD m(2, 3);
+    Matrix m(2, 3);
     m(0, 0) = -1.0; m(0, 1) = 0.2; m(0, 2) = 1.5;
     m(1, 0) = 0.8; m(1, 1) = 0.0; m(1, 2) = 2.0;
 
-    MatD clipped = m.clip(0.1, 1.0);
+    Matrix clipped = m.clip(0.1, 1.0);
 
     CHECK(clipped(0, 0) == doctest::Approx(0.1));
     CHECK(clipped(0, 1) == doctest::Approx(0.2));
@@ -111,7 +97,7 @@ TEST_CASE("Matrix clip clamps values to bounds")
 
 TEST_CASE("Matrix clip throws when min exceeds max")
 {
-    MatD m(1, 1, 0.0);
+    Matrix m(1, 1, 0.0);
     CHECK_THROWS_WITH_AS(m.clip(2.0, 1.0),
                          "Matrix::clip: min_value must not exceed max_value",
                          runtime_error);
@@ -119,7 +105,7 @@ TEST_CASE("Matrix clip throws when min exceeds max")
 
 TEST_CASE("Matrix scale_by_scalar throws on zero samples")
 {
-    MatD m(1, 1, 2.0);
+    Matrix m(1, 1, 2.0);
     CHECK_THROWS_WITH_AS(m.scale_by_scalar(0),
                          "Matrix::scale_by_scalar: samples must be bigger than 0",
                          runtime_error);
@@ -128,7 +114,7 @@ TEST_CASE("Matrix scale_by_scalar throws on zero samples")
 TEST_CASE("Matrix from_vec_as_column converts ints to column matrix")
 {
     VecI v = {1, -2, 3};
-    MatD col = MatD::from_vec_as_column(v);
+    Matrix col = Matrix::from_one_dimensional_as_column(v);
 
     CHECK(col.rows == 3);
     CHECK(col.cols == 1);
@@ -140,16 +126,16 @@ TEST_CASE("Matrix from_vec_as_column converts ints to column matrix")
 // Matrix dot tests
 TEST_CASE("Matrix dot multiplies small matrices correctly")
 {
-    MatD a(2, 3);
+    Matrix a(2, 3);
     a(0, 0) = 1.0; a(0, 1) = 2.0; a(0, 2) = 3.0;
     a(1, 0) = 4.0; a(1, 1) = 5.0; a(1, 2) = 6.0;
 
-    MatD b(3, 2);
+    Matrix b(3, 2);
     b(0, 0) = 7.0; b(0, 1) = 8.0;
     b(1, 0) = 9.0; b(1, 1) = 10.0;
     b(2, 0) = 11.0; b(2, 1) = 12.0;
 
-    MatD c = Matrix::dot(a, b);
+    Matrix c = Matrix::dot(a, b);
     CHECK(c.rows == 2);
     CHECK(c.cols == 2);
 
@@ -161,14 +147,14 @@ TEST_CASE("Matrix dot multiplies small matrices correctly")
 
 TEST_CASE("Matrix dot throws on empty matrices")
 {
-    MatD a;
-    MatD b(1, 1, 1.0);
+    Matrix a;
+    Matrix b(1, 1, 1.0);
     CHECK_THROWS_WITH_AS(Matrix::dot(a, b),
                          "Matrix::dot: matrices must not be empty",
                          runtime_error);
 
-    MatD c(1, 1, 1.0);
-    MatD d;
+    Matrix c(1, 1, 1.0);
+    Matrix d;
     CHECK_THROWS_WITH_AS(Matrix::dot(c, d),
                          "Matrix::dot: matrices must not be empty",
                          runtime_error);
@@ -176,202 +162,17 @@ TEST_CASE("Matrix dot throws on empty matrices")
 
 TEST_CASE("Matrix dot throws on incompatible shapes")
 {
-    MatD a(2, 3);
-    MatD b(4, 1);
+    Matrix a(2, 3);
+    Matrix b(4, 1);
     CHECK_THROWS_WITH_AS(Matrix::dot(a, b),
                          "Matrix::dot: incompatible shapes",
                          runtime_error);
-}
-
-// classification_accuracy tests
-TEST_CASE("classification_accuracy computes correct value for sparse labels")
-{
-    MatD preds(3, 3);
-    preds(0, 0) = 0.7; preds(0, 1) = 0.1; preds(0, 2) = 0.2;
-    preds(1, 0) = 0.1; preds(1, 1) = 0.5; preds(1, 2) = 0.4;
-    preds(2, 0) = 0.2; preds(2, 1) = 0.3; preds(2, 2) = 0.5;
-
-    VecI targets = {0, 1, 2};
-
-    double acc = classification_accuracy(preds, targets);
-    CHECK(acc == doctest::Approx(1.0));
-}
-
-TEST_CASE("classification_accuracy throws on sparse size mismatch")
-{
-    MatD preds(2, 3);
-    preds(0, 0) = 0.7; preds(0, 1) = 0.2; preds(0, 2) = 0.1;
-    preds(1, 0) = 0.2; preds(1, 1) = 0.3; preds(1, 2) = 0.5;
-
-    VecI targets = {0}; // mismatch
-
-    CHECK_THROWS_WITH_AS(classification_accuracy(preds, targets),
-                         "classification_accuracy: y_pred.rows must match y_true.size()",
-                         runtime_error);
-}
-
-TEST_CASE("classification_accuracy throws on sparse empty predictions")
-{
-    MatD preds(1, 0);
-    VecI targets = {0};
-    CHECK_THROWS_WITH_AS(classification_accuracy(preds, targets),
-                         "classification_accuracy: y_pred must be non-empty",
-                         runtime_error);
-}
-
-TEST_CASE("classification_accuracy throws on sparse class index out of range")
-{
-    MatD preds(1, 2);
-    preds(0, 0) = 0.5; preds(0, 1) = 0.5;
-    VecI targets = {2}; // invalid class
-
-    CHECK_THROWS_WITH_AS(classification_accuracy(preds, targets),
-                         "classification_accuracy: class index out of range",
-                         runtime_error);
-}
-
-TEST_CASE("classification_accuracy computes correct value for one-hot labels")
-{
-    MatD preds(2, 3);
-    preds(0, 0) = 0.6; preds(0, 1) = 0.3; preds(0, 2) = 0.1;
-    preds(1, 0) = 0.2; preds(1, 1) = 0.5; preds(1, 2) = 0.3;
-
-    MatD targets(2, 3, 0.0);
-    targets(0, 0) = 1.0;
-    targets(1, 1) = 1.0;
-
-    double acc = classification_accuracy(preds, targets);
-    CHECK(acc == doctest::Approx(1.0));
-}
-
-TEST_CASE("classification_accuracy throws on one-hot shape mismatch")
-{
-    MatD preds(1, 2);
-    preds(0, 0) = 0.5; preds(0, 1) = 0.5;
-
-    MatD targets(2, 2, 0.0); // mismatched rows
-    targets(0, 0) = 1.0;
-    targets(1, 1) = 1.0;
-
-    CHECK_THROWS_WITH_AS(classification_accuracy(preds, targets),
-                         "classification_accuracy: y_pred and y_true must have the same shape",
-                         runtime_error);
-}
-
-TEST_CASE("classification_accuracy throws on one-hot empty predictions")
-{
-    MatD preds(0, 0);
-    MatD targets(0, 0);
-    CHECK_THROWS_WITH_AS(classification_accuracy(preds, targets),
-                         "classification_accuracy: y_pred must be non-empty",
-                         runtime_error);
-}
-
-// binary_accuracy tests
-TEST_CASE("binary_accuracy computes fraction of matching thresholded outputs")
-{
-    MatD preds(2, 2);
-    preds(0, 0) = 0.6; preds(0, 1) = 0.4;
-    preds(1, 0) = 0.49; preds(1, 1) = 0.51;
-
-    MatD targets(2, 2);
-    targets(0, 0) = 1.0; targets(0, 1) = 0.0;
-    targets(1, 0) = 1.0; targets(1, 1) = 0.0;
-
-    double acc = binary_accuracy(preds, targets);
-    CHECK(acc == doctest::Approx(0.5)); // 2 of 4 outputs match after thresholding
-}
-
-TEST_CASE("binary_accuracy throws on shape mismatch")
-{
-    MatD preds(2, 1, 0.6);
-    MatD targets(1, 1, 1.0);
-
-    CHECK_THROWS_WITH_AS(binary_accuracy(preds, targets),
-                         "binary_accuracy: y_pred and y_true must have the same shape",
-                         runtime_error);
-}
-
-TEST_CASE("binary_accuracy throws when predictions have zero columns")
-{
-    MatD preds(1, 0);
-    MatD targets(1, 0);
-
-    CHECK_THROWS_WITH_AS(binary_accuracy(preds, targets),
-                         "binary_accuracy: y_pred must have at least one column",
-                         runtime_error);
-}
-
-// regression_accuracy_precision tests
-TEST_CASE("regression_accuracy_precision computes precision from target stddev")
-{
-    MatD targets(2, 1);
-    targets(0, 0) = 1.0;
-    targets(1, 0) = 3.0;
-
-    double precision = regression_accuracy_precision(targets, 10.0);
-    CHECK(precision == doctest::Approx(0.1)); // stddev 1.0 / 10
-}
-
-TEST_CASE("regression_accuracy_precision handles zero variance and validates inputs")
-{
-    MatD constant(3, 1, 5.0);
-    double precision = regression_accuracy_precision(constant, 5.0);
-    CHECK(precision == doctest::Approx(1e-7));
-
-    MatD empty;
-    empty.assign(0, 0, 0.0);
-    CHECK_THROWS_WITH_AS(regression_accuracy_precision(empty, 5.0),
-                         "regression_accuracy_precision: y_true must be non-empty",
-                         runtime_error);
-
-    MatD nonempty(1, 1, 0.0);
-    CHECK_THROWS_WITH_AS(regression_accuracy_precision(nonempty, 0.0),
-                         "regression_accuracy: precision_divisor must be positive",
-                         runtime_error);
-}
-
-// regression_accuracy tests
-TEST_CASE("regression_accuracy counts predictions within given precision")
-{
-    MatD preds(2, 1);
-    preds(0, 0) = 0.10; preds(1, 0) = 0.30;
-
-    MatD targets(2, 1);
-    targets(0, 0) = 0.11; targets(1, 0) = 0.55;
-
-    double acc = regression_accuracy(preds, targets, 0.05); // only first sample within
-    CHECK(acc == doctest::Approx(0.5));
-}
-
-TEST_CASE("regression_accuracy throws on shape mismatch or invalid precision")
-{
-    MatD preds(1, 1, 0.1);
-    MatD targets(2, 1, 0.1);
-
-    CHECK_THROWS_WITH_AS(regression_accuracy(preds, targets, 0.1),
-                         "regression_accuracy: y_pred and y_true must have the same shape",
-                         runtime_error);
-
-    MatD preds2(1, 1, 0.1);
-    MatD targets2(1, 1, 0.1);
-    CHECK_THROWS_WITH_AS(regression_accuracy(preds2, targets2, 0.0),
-                         "regression_accuracy: precision must be positive",
-                         runtime_error);
-
-    MatD empty_preds;
-    empty_preds.assign(0, 0, 0.0);
-    MatD empty_targets;
-    empty_targets.assign(0, 0, 0.0);
-    CHECK_THROWS_WITH_AS(regression_accuracy(empty_preds, empty_targets, 0.1),
-                         "regression_accuracy: inputs must be non-empty",
-                         runtime_error);
-}
+} 
 
 // generate_spiral_data tests
 TEST_CASE("generate_spiral_data shapes and labels are correct")
 {
-    MatD X;
+    Matrix X;
     VecI y;
 
     generate_spiral_data(10, 3, X, y);
@@ -402,7 +203,7 @@ TEST_CASE("generate_spiral_data shapes and labels are correct")
 
 TEST_CASE("generate_spiral_data throws on invalid arguments")
 {
-    MatD X;
+    Matrix X;
     VecI y;
 
     CHECK_THROWS_WITH_AS(generate_spiral_data(1, 3, X, y),
@@ -416,7 +217,7 @@ TEST_CASE("generate_spiral_data throws on invalid arguments")
 // generate_vertical_data tests
 TEST_CASE("generate_vertical_data throws on invalid arguments")
 {
-    MatD X;
+    Matrix X;
     VecI y;
 
     CHECK_THROWS_WITH_AS(generate_vertical_data(0, 3, X, y),
@@ -429,7 +230,7 @@ TEST_CASE("generate_vertical_data throws on invalid arguments")
 
 TEST_CASE("generate_vertical_data fills samples with labels")
 {
-    MatD X;
+    Matrix X;
     VecI y;
 
     g_rng.seed(0);
@@ -462,8 +263,8 @@ TEST_CASE("generate_vertical_data fills samples with labels")
 // generate_sine_data tests
 TEST_CASE("generate_sine_data outputs sine-like pairs")
 {
-    MatD X;
-    MatD y;
+    Matrix X;
+    Matrix y;
 
     g_rng.seed(0);
     generate_sine_data(5, X, y);
@@ -484,8 +285,8 @@ TEST_CASE("generate_sine_data outputs sine-like pairs")
 
 TEST_CASE("generate_sine_data throws on invalid arguments")
 {
-    MatD X;
-    MatD y;
+    Matrix X;
+    Matrix y;
     CHECK_THROWS_WITH_AS(generate_sine_data(1, X, y),
                          "generate_sine_data: invalid arguments",
                          runtime_error);
@@ -494,17 +295,17 @@ TEST_CASE("generate_sine_data throws on invalid arguments")
 // plot_scatter_svg tests
 TEST_CASE("plot_scatter_svg validates inputs and paths")
 {
-    MatD empty;
+    Matrix empty;
     CHECK_THROWS_WITH_AS(plot_scatter_svg("unused.svg", empty),
                          "plot_scatter_svg: invalid input data",
                          runtime_error);
 
-    MatD wrong_cols(1, 1, 0.0);
+    Matrix wrong_cols(1, 1, 0.0);
     CHECK_THROWS_WITH_AS(plot_scatter_svg("unused.svg", wrong_cols),
                          "plot_scatter_svg: invalid input data",
                          runtime_error);
 
-    MatD points(1, 2, 0.5);
+    Matrix points(1, 2, 0.5);
     VecI labels = {0};
     CHECK_THROWS_WITH_AS(plot_scatter_svg("/nonexistent_dir/plot.svg", points, labels),
                          "plot_scatter_svg: given path is invalid",
@@ -513,7 +314,7 @@ TEST_CASE("plot_scatter_svg validates inputs and paths")
 
 TEST_CASE("plot_scatter_svg writes circles with optional labels")
 {
-    MatD points(3, 2);
+    Matrix points(3, 2);
     points(0, 0) = 0.0; points(0, 1) = 0.0;
     points(1, 0) = 1.0; points(1, 1) = 0.5;
     points(2, 0) = 0.5; points(2, 1) = 1.0;
@@ -545,7 +346,7 @@ TEST_CASE("plot_scatter_svg writes circles with optional labels")
 
 TEST_CASE("plot_scatter_svg handles unlabeled points")
 {
-    MatD points(2, 2);
+    Matrix points(2, 2);
     points(0, 0) = -1.0; points(0, 1) = -1.0;
     points(1, 0) = 2.0;  points(1, 1) = 3.0;
 
@@ -565,7 +366,7 @@ TEST_CASE("plot_scatter_svg handles unlabeled points")
 TEST_CASE("LayerDense forward matches known example")
 {
     // inputs: 3 samples x 4 features
-    MatD inputs(3, 4);
+    Matrix inputs(3, 4);
     inputs(0, 0) = 1.0; inputs(0, 1) = 2.0; inputs(0, 2) = 3.0; inputs(0, 3) = 2.5;
     inputs(1, 0) = 2.0; inputs(1, 1) = 5.0; inputs(1, 2) = -1.0; inputs(1, 3) = 2.0;
     inputs(2, 0) = -1.5; inputs(2, 1) = 2.7; inputs(2, 2) = 3.3; inputs(2, 3) = -0.8;
@@ -603,7 +404,7 @@ TEST_CASE("LayerDense forward matches known example")
 TEST_CASE("LayerDense forward with custom weights and biases")
 {
     // prepare inputs as above example
-    MatD inputs(3, 4);
+    Matrix inputs(3, 4);
     inputs(0, 0) = 1.0; inputs(0, 1) = 2.0; inputs(0, 2) = 3.0; inputs(0, 3) = 2.5;
     inputs(1, 0) = 2.0; inputs(1, 1) = 5.0; inputs(1, 2) = -1.0; inputs(1, 3) = 2.0;
     inputs(2, 0) = -1.5; inputs(2, 1) = 2.7; inputs(2, 2) = 3.3; inputs(2, 3) = -0.8;
@@ -642,7 +443,7 @@ TEST_CASE("LayerDense forward with custom weights and biases")
 
 TEST_CASE("LayerDense output shape matches inputs and neuron count")
 {
-    MatD X;
+    Matrix X;
     VecI y;
     generate_spiral_data(5, 2, X, y); // 10 samples x 2 features
 
@@ -655,7 +456,7 @@ TEST_CASE("LayerDense output shape matches inputs and neuron count")
 
 TEST_CASE("LayerDense forward throws when weights are empty")
 {
-    MatD inputs(1, 1, 1.0);
+    Matrix inputs(1, 1, 1.0);
     LayerDense layer(1, 1);
     layer.weights.assign(0, 0); // make weights empty
 
@@ -666,7 +467,7 @@ TEST_CASE("LayerDense forward throws when weights are empty")
 
 TEST_CASE("LayerDense forward throws on input/weight shape mismatch")
 {
-    MatD inputs(1, 3);       // 1 x 3
+    Matrix inputs(1, 3);       // 1 x 3
     LayerDense layer(2, 2);  // expects 2 inputs
     CHECK_THROWS_WITH_AS(layer.forward(inputs),
                          "LayerDense::forward: inputs.cols must match weights.rows",
@@ -675,7 +476,7 @@ TEST_CASE("LayerDense forward throws on input/weight shape mismatch")
 
 TEST_CASE("LayerDense forward throws on bias size mismatch")
 {
-    MatD inputs(1, 2);
+    Matrix inputs(1, 2);
     LayerDense layer(2, 3);
     layer.biases = {1.0, 2.0}; // size 2, but weights.cols = 3
     CHECK_THROWS_WITH_AS(layer.forward(inputs),
@@ -685,7 +486,7 @@ TEST_CASE("LayerDense forward throws on bias size mismatch")
 
 TEST_CASE("LayerDense backward computes gradients")
 {
-    MatD inputs(2, 2);
+    Matrix inputs(2, 2);
     inputs(0, 0) = 1.0; inputs(0, 1) = 2.0;
     inputs(1, 0) = 3.0; inputs(1, 1) = 4.0;
 
@@ -697,7 +498,7 @@ TEST_CASE("LayerDense backward computes gradients")
 
     layer.forward(inputs);
 
-    MatD dvalues(2, 2);
+    Matrix dvalues(2, 2);
     dvalues(0, 0) = 1.0; dvalues(0, 1) = 2.0;
     dvalues(1, 0) = 3.0; dvalues(1, 1) = 4.0;
 
@@ -724,11 +525,11 @@ TEST_CASE("LayerDense backward computes regularization gradients")
     layer.weights(1, 0) = -3.0; layer.weights(1, 1) = 4.0;
     layer.biases[0] = -5.0; layer.biases[1] = 6.0;
 
-    MatD inputs(1, 2);
+    Matrix inputs(1, 2);
     inputs(0, 0) = 1.0; inputs(0, 1) = 1.0;
     layer.forward(inputs);
 
-    MatD dvalues(1, 2);
+    Matrix dvalues(1, 2);
     dvalues(0, 0) = 0.1; dvalues(0, 1) = -0.2;
 
     layer.backward(dvalues);
@@ -753,13 +554,13 @@ TEST_CASE("LayerDense backward computes regularization gradients")
 
 TEST_CASE("LayerDense backward throws on shape mismatch")
 {
-    MatD inputs(1, 2);
+    Matrix inputs(1, 2);
     inputs(0, 0) = 1.0; inputs(0, 1) = 2.0;
 
     LayerDense layer(2, 2);
     layer.forward(inputs);
 
-    MatD bad_dvalues(1, 1, 0.0); // wrong number of columns
+    Matrix bad_dvalues(1, 1, 0.0); // wrong number of columns
     CHECK_THROWS_WITH_AS(layer.backward(bad_dvalues),
                          "LayerDense::backward: dvalues shape mismatch",
                          runtime_error);
@@ -781,7 +582,7 @@ TEST_CASE("LayerDropout forward scales activations with binary mask")
     // reset g_rng so LayerDropout sees the same sequence
     g_rng.seed(0);
 
-    MatD inputs(1, 2);
+    Matrix inputs(1, 2);
     inputs(0, 0) = 2.0;
     inputs(0, 1) = -3.0;
 
@@ -801,7 +602,7 @@ TEST_CASE("LayerDropout backward multiplies by mask")
     dropout.scaled_binary_mask(0, 0) = 5.0;
     dropout.scaled_binary_mask(0, 1) = 0.0;
 
-    MatD dvalues(1, 2);
+    Matrix dvalues(1, 2);
     dvalues(0, 0) = 3.0; dvalues(0, 1) = 4.0;
 
     dropout.backward(dvalues);
@@ -809,7 +610,7 @@ TEST_CASE("LayerDropout backward multiplies by mask")
     CHECK(dropout.dinputs(0, 0) == doctest::Approx(15.0));
     CHECK(dropout.dinputs(0, 1) == doctest::Approx(0.0));
 
-    MatD bad_dvalues(2, 2, 0.0); // mismatched rows
+    Matrix bad_dvalues(2, 2, 0.0); // mismatched rows
     CHECK_THROWS_WITH_AS(dropout.backward(bad_dvalues),
                          "LayerDropout::backward: dvalues shape mismatch",
                          runtime_error);
@@ -828,7 +629,7 @@ TEST_CASE("LayerDropout constructor throws on invalid rate")
 // ActivationReLU tests
 TEST_CASE("ActivationReLU sets negatives to zero and keeps positives")
 {
-    MatD inputs(2, 3);
+    Matrix inputs(2, 3);
     inputs(0, 0) = -1.0; inputs(0, 1) = 0.0; inputs(0, 2) = 2.5;
     inputs(1, 0) = 3.0; inputs(1, 1) = -0.1; inputs(1, 2) = 0.0;
 
@@ -860,14 +661,14 @@ TEST_CASE("ActivationReLU sets negatives to zero and keeps positives")
 
 TEST_CASE("ActivationReLU backward zeroes gradients where inputs were non-positive")
 {
-    MatD inputs(2, 2);
+    Matrix inputs(2, 2);
     inputs(0, 0) = -1.0; inputs(0, 1) = 1.0;
     inputs(1, 0) = 0.0;  inputs(1, 1) = 2.0;
 
     ActivationReLU activation;
     activation.forward(inputs);
 
-    MatD dvalues(2, 2);
+    Matrix dvalues(2, 2);
     dvalues(0, 0) = 5.0; dvalues(0, 1) = 6.0;
     dvalues(1, 0) = 7.0; dvalues(1, 1) = 8.0;
 
@@ -881,11 +682,11 @@ TEST_CASE("ActivationReLU backward zeroes gradients where inputs were non-positi
 
 TEST_CASE("ActivationReLU backward throws on shape mismatch")
 {
-    MatD inputs(1, 1, 1.0);
+    Matrix inputs(1, 1, 1.0);
     ActivationReLU activation;
     activation.forward(inputs);
 
-    MatD bad_dvalues(1, 2, 0.0);
+    Matrix bad_dvalues(1, 2, 0.0);
     CHECK_THROWS_WITH_AS(activation.backward(bad_dvalues),
                          "ActivationReLU::backward: dvalues shape mismatch",
                          runtime_error);
@@ -894,7 +695,7 @@ TEST_CASE("ActivationReLU backward throws on shape mismatch")
 // ActivationSoftmax tests
 TEST_CASE("ActivationSoftmax computes correct probabilities per row")
 {
-    MatD inputs(2, 3);
+    Matrix inputs(2, 3);
 
     // Row 0: [0, 1, 2] -> softmax ≈ [0.09003, 0.24473, 0.66524]
     inputs(0, 0) = 0.0; inputs(0, 1) = 1.0; inputs(0, 2) = 2.0;
@@ -940,7 +741,7 @@ TEST_CASE("ActivationSoftmax computes correct probabilities per row")
 
 TEST_CASE("ActivationSoftmax throws when exponentials sum is non-finite")
 {
-    MatD inputs(1, 1);
+    Matrix inputs(1, 1);
     inputs(0, 0) = -std::numeric_limits<double>::infinity();
     ActivationSoftmax activation;
     CHECK_THROWS_WITH_AS(activation.forward(inputs),
@@ -950,13 +751,13 @@ TEST_CASE("ActivationSoftmax throws when exponentials sum is non-finite")
 
 TEST_CASE("ActivationSoftmax backward computes gradients")
 {
-    MatD inputs(1, 2);
+    Matrix inputs(1, 2);
     inputs(0, 0) = 0.0; inputs(0, 1) = 0.0;
 
     ActivationSoftmax activation;
     activation.forward(inputs);
 
-    MatD dvalues(1, 2);
+    Matrix dvalues(1, 2);
     dvalues(0, 0) = 1.0; dvalues(0, 1) = -1.0;
 
     activation.backward(dvalues);
@@ -967,13 +768,13 @@ TEST_CASE("ActivationSoftmax backward computes gradients")
 
 TEST_CASE("ActivationSoftmax backward throws on shape mismatch")
 {
-    MatD inputs(1, 2);
+    Matrix inputs(1, 2);
     inputs(0, 0) = 0.1; inputs(0, 1) = 0.2;
 
     ActivationSoftmax activation;
     activation.forward(inputs);
 
-    MatD bad_dvalues(2, 2, 0.0); // wrong number of rows
+    Matrix bad_dvalues(2, 2, 0.0); // wrong number of rows
     CHECK_THROWS_WITH_AS(activation.backward(bad_dvalues),
                          "ActivationSoftmax::backward: dvalues shape mismatch",
                          runtime_error);
@@ -982,7 +783,7 @@ TEST_CASE("ActivationSoftmax backward throws on shape mismatch")
 // ActivationSigmoid tests
 TEST_CASE("ActivationSigmoid forward produces outputs in (0,1)")
 {
-    MatD inputs(2, 2);
+    Matrix inputs(2, 2);
     inputs(0, 0) = 0.0; inputs(0, 1) = 1.0;
     inputs(1, 0) = -1.0; inputs(1, 1) = 2.0;
 
@@ -997,13 +798,13 @@ TEST_CASE("ActivationSigmoid forward produces outputs in (0,1)")
 
 TEST_CASE("ActivationSigmoid backward multiplies upstream gradient by sigmoid derivative")
 {
-    MatD inputs(1, 2);
+    Matrix inputs(1, 2);
     inputs(0, 0) = 0.0; inputs(0, 1) = -2.0;
 
     ActivationSigmoid activation;
     activation.forward(inputs);
 
-    MatD upstream(1, 2, 1.0); // ones
+    Matrix upstream(1, 2, 1.0); // ones
     activation.backward(upstream);
 
     const double s0 = 1.0 / (1.0 + exp(-inputs(0, 0)));
@@ -1014,11 +815,11 @@ TEST_CASE("ActivationSigmoid backward multiplies upstream gradient by sigmoid de
 
 TEST_CASE("ActivationSigmoid backward throws on shape mismatch")
 {
-    MatD inputs(1, 1, 0.0);
+    Matrix inputs(1, 1, 0.0);
     ActivationSigmoid activation;
     activation.forward(inputs);
 
-    MatD bad_dvalues(2, 1, 1.0);
+    Matrix bad_dvalues(2, 1, 1.0);
     CHECK_THROWS_WITH_AS(activation.backward(bad_dvalues),
                          "ActivationSigmoid::backward: dvalues shape mismatch",
                          runtime_error);
@@ -1027,7 +828,7 @@ TEST_CASE("ActivationSigmoid backward throws on shape mismatch")
 // ActivationLinear tests
 TEST_CASE("ActivationLinear forward passes inputs through unchanged")
 {
-    MatD inputs(1, 3);
+    Matrix inputs(1, 3);
     inputs(0, 0) = -1.0; inputs(0, 1) = 0.5; inputs(0, 2) = 2.0;
 
     ActivationLinear activation;
@@ -1042,20 +843,20 @@ TEST_CASE("ActivationLinear forward passes inputs through unchanged")
 
 TEST_CASE("ActivationLinear backward copies upstream gradients and checks shape")
 {
-    MatD inputs(1, 2);
+    Matrix inputs(1, 2);
     inputs(0, 0) = 0.1; inputs(0, 1) = -0.2;
 
     ActivationLinear activation;
     activation.forward(inputs);
 
-    MatD upstream(1, 2);
+    Matrix upstream(1, 2);
     upstream(0, 0) = 3.0; upstream(0, 1) = -4.0;
     activation.backward(upstream);
 
     CHECK(activation.dinputs(0, 0) == doctest::Approx(3.0));
     CHECK(activation.dinputs(0, 1) == doctest::Approx(-4.0));
 
-    MatD bad(2, 2, 0.0);
+    Matrix bad(2, 2, 0.0);
     CHECK_THROWS_WITH_AS(activation.backward(bad),
                          "ActivationLinear::backward: dvalues shape mismatch",
                          runtime_error);
@@ -1091,7 +892,7 @@ TEST_CASE("Loss regularization_loss is zero when regularizers are zero")
 // LossCategoricalCrossEntropy tests
 TEST_CASE("LossCategoricalCrossEntropy matches known example with sparse labels")
 {
-    MatD preds(3, 3);
+    Matrix preds(3, 3);
     preds(0, 0) = 0.7; preds(0, 1) = 0.1; preds(0, 2) = 0.2;
     preds(1, 0) = 0.1; preds(1, 1) = 0.5; preds(1, 2) = 0.4;
     preds(2, 0) = 0.02; preds(2, 1) = 0.9; preds(2, 2) = 0.08;
@@ -1107,13 +908,13 @@ TEST_CASE("LossCategoricalCrossEntropy matches known example with sparse labels"
 
 TEST_CASE("LossCategoricalCrossEntropy matches known example with one-hot labels")
 {
-    MatD preds(3, 3);
+    Matrix preds(3, 3);
     preds(0, 0) = 0.7; preds(0, 1) = 0.1; preds(0, 2) = 0.2;
     preds(1, 0) = 0.1; preds(1, 1) = 0.5; preds(1, 2) = 0.4;
     preds(2, 0) = 0.02; preds(2, 1) = 0.9; preds(2, 2) = 0.08;
 
     // one-hot
-    MatD targets(3, 3, 0.0);
+    Matrix targets(3, 3, 0.0);
     targets(0, 0) = 1.0;
     targets(1, 1) = 1.0;
     targets(2, 1) = 1.0;
@@ -1126,7 +927,7 @@ TEST_CASE("LossCategoricalCrossEntropy matches known example with one-hot labels
 
 TEST_CASE("LossCategoricalCrossEntropy clips to avoid log(0)")
 {
-    MatD preds(1, 3);
+    Matrix preds(1, 3);
     preds(0, 0) = 1.0;
     preds(0, 1) = 0.0;
     preds(0, 2) = 0.0;
@@ -1141,7 +942,7 @@ TEST_CASE("LossCategoricalCrossEntropy clips to avoid log(0)")
 
 TEST_CASE("LossCategoricalCrossEntropy clips zero confidence for true class")
 {
-    MatD preds(1, 3);
+    Matrix preds(1, 3);
     preds(0, 0) = 0.0;
     preds(0, 1) = 0.5;
     preds(0, 2) = 0.5;
@@ -1157,7 +958,7 @@ TEST_CASE("LossCategoricalCrossEntropy clips zero confidence for true class")
 
 TEST_CASE("LossCategoricalCrossEntropy throws on sparse label count mismatch")
 {
-    MatD preds(2, 3);
+    Matrix preds(2, 3);
     preds(0, 0) = 0.7; preds(0, 1) = 0.1; preds(0, 2) = 0.2;
     preds(1, 0) = 0.1; preds(1, 1) = 0.5; preds(1, 2) = 0.4;
 
@@ -1171,7 +972,7 @@ TEST_CASE("LossCategoricalCrossEntropy throws on sparse label count mismatch")
 
 TEST_CASE("LossCategoricalCrossEntropy mean_sample_losses throws on zero samples")
 {
-    MatD preds;
+    Matrix preds;
     preds.assign(0, 2, 0.0);
     VecI targets;
 
@@ -1183,7 +984,7 @@ TEST_CASE("LossCategoricalCrossEntropy mean_sample_losses throws on zero samples
 
 TEST_CASE("LossCategoricalCrossEntropy throws on sparse label out of range")
 {
-    MatD preds(1, 2);
+    Matrix preds(1, 2);
     preds(0, 0) = 0.5; preds(0, 1) = 0.5;
     VecI targets = {2}; // invalid index
 
@@ -1195,11 +996,11 @@ TEST_CASE("LossCategoricalCrossEntropy throws on sparse label out of range")
 
 TEST_CASE("LossCategoricalCrossEntropy throws on one-hot shape mismatch")
 {
-    MatD preds(2, 2);
+    Matrix preds(2, 2);
     preds(0, 0) = 0.7; preds(0, 1) = 0.3;
     preds(1, 0) = 0.1; preds(1, 1) = 0.9;
 
-    MatD targets(1, 2, 0.0); // mismatched rows
+    Matrix targets(1, 2, 0.0); // mismatched rows
 
     LossCategoricalCrossEntropy loss;
     CHECK_THROWS_WITH_AS(loss.calculate(preds, targets),
@@ -1209,7 +1010,7 @@ TEST_CASE("LossCategoricalCrossEntropy throws on one-hot shape mismatch")
 
 TEST_CASE("LossCategoricalCrossEntropy backward (sparse) clamps probabilities")
 {
-    MatD preds(2, 2);
+    Matrix preds(2, 2);
     preds(0, 0) = 1.0; preds(0, 1) = 0.0; // will clamp to 1 - eps and eps
     preds(1, 0) = 0.2; preds(1, 1) = 0.8;
     VecI targets = {0, 1};
@@ -1225,11 +1026,11 @@ TEST_CASE("LossCategoricalCrossEntropy backward (sparse) clamps probabilities")
 
 TEST_CASE("LossCategoricalCrossEntropy backward (one-hot) clamps low probabilities")
 {
-    MatD preds(2, 2);
+    Matrix preds(2, 2);
     preds(0, 0) = 0.0; preds(0, 1) = 1.0; // clamp low branch
     preds(1, 0) = 0.6; preds(1, 1) = 0.4;
 
-    MatD targets(2, 2, 0.0);
+    Matrix targets(2, 2, 0.0);
     targets(0, 0) = 1.0;
     targets(1, 1) = 1.0;
 
@@ -1244,7 +1045,7 @@ TEST_CASE("LossCategoricalCrossEntropy backward (one-hot) clamps low probabiliti
 
 TEST_CASE("LossCategoricalCrossEntropy backward throws on sparse shape mismatch")
 {
-    MatD preds(1, 2, 0.5);
+    Matrix preds(1, 2, 0.5);
     VecI targets = {0, 1}; // size mismatch
 
     LossCategoricalCrossEntropy loss;
@@ -1255,7 +1056,7 @@ TEST_CASE("LossCategoricalCrossEntropy backward throws on sparse shape mismatch"
 
 TEST_CASE("LossCategoricalCrossEntropy backward throws on zero samples sparse path")
 {
-    MatD preds;
+    Matrix preds;
     preds.assign(0, 2, 0.0);
     VecI targets;
 
@@ -1267,7 +1068,7 @@ TEST_CASE("LossCategoricalCrossEntropy backward throws on zero samples sparse pa
 
 TEST_CASE("LossCategoricalCrossEntropy backward throws on sparse class out of range")
 {
-    MatD preds(1, 1, 0.5);
+    Matrix preds(1, 1, 0.5);
     VecI targets = {1}; // invalid index
 
     LossCategoricalCrossEntropy loss;
@@ -1278,8 +1079,8 @@ TEST_CASE("LossCategoricalCrossEntropy backward throws on sparse class out of ra
 
 TEST_CASE("LossCategoricalCrossEntropy backward throws on one-hot shape mismatch")
 {
-    MatD preds(1, 2, 0.5);
-    MatD targets(2, 2, 0.0); // mismatched rows
+    Matrix preds(1, 2, 0.5);
+    Matrix targets(2, 2, 0.0); // mismatched rows
 
     LossCategoricalCrossEntropy loss;
     CHECK_THROWS_WITH_AS(loss.backward(preds, targets),
@@ -1289,9 +1090,9 @@ TEST_CASE("LossCategoricalCrossEntropy backward throws on one-hot shape mismatch
 
 TEST_CASE("LossCategoricalCrossEntropy backward throws on zero samples one-hot path")
 {
-    MatD preds;
+    Matrix preds;
     preds.assign(0, 2, 0.0);
-    MatD targets;
+    Matrix targets;
     targets.assign(0, 2, 0.0);
 
     LossCategoricalCrossEntropy loss;
@@ -1303,11 +1104,11 @@ TEST_CASE("LossCategoricalCrossEntropy backward throws on zero samples one-hot p
 // LossBinaryCrossentropy tests
 TEST_CASE("LossBinaryCrossentropy calculates mean binary cross-entropy per sample")
 {
-    MatD preds(2, 2);
+    Matrix preds(2, 2);
     preds(0, 0) = 0.9; preds(0, 1) = 0.2;
     preds(1, 0) = 0.3; preds(1, 1) = 0.6;
 
-    MatD targets(2, 2);
+    Matrix targets(2, 2);
     targets(0, 0) = 1.0; targets(0, 1) = 0.0;
     targets(1, 0) = 0.0; targets(1, 1) = 1.0;
 
@@ -1319,11 +1120,11 @@ TEST_CASE("LossBinaryCrossentropy calculates mean binary cross-entropy per sampl
 
 TEST_CASE("LossBinaryCrossentropy backward computes gradients and scales by samples")
 {
-    MatD preds(2, 2);
+    Matrix preds(2, 2);
     preds(0, 0) = 0.9; preds(0, 1) = 0.2;
     preds(1, 0) = 0.3; preds(1, 1) = 0.6;
 
-    MatD targets(2, 2);
+    Matrix targets(2, 2);
     targets(0, 0) = 1.0; targets(0, 1) = 0.0;
     targets(1, 0) = 0.0; targets(1, 1) = 1.0;
 
@@ -1340,8 +1141,8 @@ TEST_CASE("LossBinaryCrossentropy backward computes gradients and scales by samp
 
 TEST_CASE("LossBinaryCrossentropy forward throws on shape mismatch")
 {
-    MatD preds(1, 2, 0.5);
-    MatD targets(2, 2, 0.5);
+    Matrix preds(1, 2, 0.5);
+    Matrix targets(2, 2, 0.5);
 
     LossBinaryCrossentropy loss;
     CHECK_THROWS_WITH_AS(loss.calculate(preds, targets),
@@ -1351,19 +1152,19 @@ TEST_CASE("LossBinaryCrossentropy forward throws on shape mismatch")
 
 TEST_CASE("LossBinaryCrossentropy forward rejects sparse labels")
 {
-    MatD preds(1, 1, 0.9);
+    Matrix preds(1, 1, 0.9);
     VecI targets = {1};
 
     LossBinaryCrossentropy loss;
     CHECK_THROWS_WITH_AS(loss.calculate(preds, targets),
-                         "LossBinaryCrossentropy: y_true must be MatD",
+                         "LossBinaryCrossentropy: y_true must be Matrix",
                          runtime_error);
 }
 
 TEST_CASE("LossBinaryCrossentropy backward throws on shape mismatch")
 {
-    MatD preds(1, 2, 0.5);
-    MatD targets(1, 1, 0.5);
+    Matrix preds(1, 2, 0.5);
+    Matrix targets(1, 1, 0.5);
 
     LossBinaryCrossentropy loss;
     CHECK_THROWS_WITH_AS(loss.backward(preds, targets),
@@ -1374,10 +1175,10 @@ TEST_CASE("LossBinaryCrossentropy backward throws on shape mismatch")
 // LossMeanSquaredError tests
 TEST_CASE("LossMeanSquaredError computes average squared error and gradients")
 {
-    MatD preds(2, 1);
+    Matrix preds(2, 1);
     preds(0, 0) = 0.0; preds(1, 0) = 1.0;
 
-    MatD targets(2, 1);
+    Matrix targets(2, 1);
     targets(0, 0) = 1.0; targets(1, 0) = 0.0;
 
     LossMeanSquaredError loss;
@@ -1391,22 +1192,22 @@ TEST_CASE("LossMeanSquaredError computes average squared error and gradients")
 
 TEST_CASE("LossMeanSquaredError validates label types and shapes")
 {
-    MatD preds(1, 1, 0.0);
+    Matrix preds(1, 1, 0.0);
     VecI sparse = {0};
 
     LossMeanSquaredError loss;
     CHECK_THROWS_WITH_AS(loss.calculate(preds, sparse),
-                         "LossMeanSquaredError: y_true must be MatD",
+                         "LossMeanSquaredError: y_true must be Matrix",
                          runtime_error);
 
-    MatD targets(2, 1, 0.0);
+    Matrix targets(2, 1, 0.0);
     CHECK_THROWS_WITH_AS(loss.calculate(preds, targets),
                          "LossMeanSquaredError: y_pred and y_true must have the same shape",
                          runtime_error);
 
-    MatD empty_preds;
+    Matrix empty_preds;
     empty_preds.assign(0, 0, 0.0);
-    MatD empty_targets;
+    Matrix empty_targets;
     empty_targets.assign(0, 0, 0.0);
     CHECK_THROWS_WITH_AS(loss.calculate(empty_preds, empty_targets),
                          "LossMeanSquaredError: y_pred must contain at least one element",
@@ -1420,10 +1221,10 @@ TEST_CASE("LossMeanSquaredError validates label types and shapes")
 // LossMeanAbsoluteError tests
 TEST_CASE("LossMeanAbsoluteError computes average absolute error and gradients")
 {
-    MatD preds(2, 1);
+    Matrix preds(2, 1);
     preds(0, 0) = 0.0; preds(1, 0) = 1.0;
 
-    MatD targets(2, 1);
+    Matrix targets(2, 1);
     targets(0, 0) = 1.0; targets(1, 0) = 0.0;
 
     LossMeanAbsoluteError loss;
@@ -1437,22 +1238,22 @@ TEST_CASE("LossMeanAbsoluteError computes average absolute error and gradients")
 
 TEST_CASE("LossMeanAbsoluteError validates label types and shapes")
 {
-    MatD preds(1, 1, 0.0);
+    Matrix preds(1, 1, 0.0);
     VecI sparse = {0};
 
     LossMeanAbsoluteError loss;
     CHECK_THROWS_WITH_AS(loss.calculate(preds, sparse),
-                         "LossMeanAbsoluteError: y_true must be MatD",
+                         "LossMeanAbsoluteError: y_true must be Matrix",
                          runtime_error);
 
-    MatD targets(2, 1, 0.0);
+    Matrix targets(2, 1, 0.0);
     CHECK_THROWS_WITH_AS(loss.calculate(preds, targets),
                          "LossMeanAbsoluteError: y_pred and y_true must have the same shape",
                          runtime_error);
 
-    MatD empty_preds;
+    Matrix empty_preds;
     empty_preds.assign(0, 0, 0.0);
-    MatD empty_targets;
+    Matrix empty_targets;
     empty_targets.assign(0, 0, 0.0);
     CHECK_THROWS_WITH_AS(loss.calculate(empty_preds, empty_targets),
                          "LossMeanAbsoluteError: y_pred must contain at least one element",
@@ -1466,7 +1267,7 @@ TEST_CASE("LossMeanAbsoluteError validates label types and shapes")
 // Combined softmax + cross-entropy tests
 TEST_CASE("ActivationSoftmaxLossCategoricalCrossEntropy end-to-end with sparse labels")
 {
-    MatD logits(2, 3);
+    Matrix logits(2, 3);
     logits(0, 0) = 1.0; logits(0, 1) = 0.0; logits(0, 2) = 0.0;
     logits(1, 0) = 0.0; logits(1, 1) = 1.0; logits(1, 2) = 0.0;
 
@@ -1476,7 +1277,7 @@ TEST_CASE("ActivationSoftmaxLossCategoricalCrossEntropy end-to-end with sparse l
     double loss = combo.forward(logits, y_true);
     CHECK(loss > 0.0);
 
-    MatD expected = combo.output;
+    Matrix expected = combo.output;
     const size_t samples = expected.rows;
     for (size_t i = 0; i < samples; ++i) {
         expected(i, static_cast<size_t>(y_true[i])) -= 1.0;
@@ -1498,17 +1299,17 @@ TEST_CASE("ActivationSoftmaxLossCategoricalCrossEntropy end-to-end with sparse l
 
 TEST_CASE("ActivationSoftmaxLossCategoricalCrossEntropy supports one-hot labels")
 {
-    MatD logits(1, 3);
+    Matrix logits(1, 3);
     logits(0, 0) = -1.0; logits(0, 1) = 2.0; logits(0, 2) = 0.5;
 
-    MatD y_true(1, 3, 0.0);
+    Matrix y_true(1, 3, 0.0);
     y_true(0, 1) = 1.0;
 
     ActivationSoftmaxLossCategoricalCrossEntropy combo;
     double loss = combo.forward(logits, y_true);
     CHECK(loss > 0.0);
 
-    MatD expected = combo.output;
+    Matrix expected = combo.output;
     expected(0, 1) -= 1.0;
 
     combo.backward(combo.output, y_true);
@@ -1522,7 +1323,7 @@ TEST_CASE("ActivationSoftmaxLossCategoricalCrossEntropy supports one-hot labels"
 
 TEST_CASE("ActivationSoftmaxLossCategoricalCrossEntropy backward throws on sparse shape mismatch")
 {
-    MatD logits(2, 2);
+    Matrix logits(2, 2);
     logits(0, 0) = 0.1; logits(0, 1) = 0.9;
     logits(1, 0) = 0.2; logits(1, 1) = 0.8;
 
@@ -1531,7 +1332,7 @@ TEST_CASE("ActivationSoftmaxLossCategoricalCrossEntropy backward throws on spars
     ActivationSoftmaxLossCategoricalCrossEntropy combo;
     combo.forward(logits, y_true);
 
-    MatD bad_dvalues(1, 2, 0.0); // wrong number of rows
+    Matrix bad_dvalues(1, 2, 0.0); // wrong number of rows
     CHECK_THROWS_WITH_AS(combo.backward(bad_dvalues, y_true),
                          "ActivationSoftmaxLossCategoricalCrossEntropy::backward: y_pred.rows must match y_true.size()",
                          runtime_error);
@@ -1539,7 +1340,7 @@ TEST_CASE("ActivationSoftmaxLossCategoricalCrossEntropy backward throws on spars
 
 TEST_CASE("ActivationSoftmaxLossCategoricalCrossEntropy backward throws on invalid sparse class index")
 {
-    MatD dvalues(1, 2, 0.5);
+    Matrix dvalues(1, 2, 0.5);
     VecI bad_labels = {3}; // out of range for 2 classes
 
     ActivationSoftmaxLossCategoricalCrossEntropy combo;
@@ -1550,8 +1351,8 @@ TEST_CASE("ActivationSoftmaxLossCategoricalCrossEntropy backward throws on inval
 
 TEST_CASE("ActivationSoftmaxLossCategoricalCrossEntropy backward throws on one-hot shape mismatch")
 {
-    MatD dvalues(1, 2, 0.5);
-    MatD y_true(2, 2, 0.0); // mismatched rows
+    Matrix dvalues(1, 2, 0.5);
+    Matrix y_true(2, 2, 0.0); // mismatched rows
 
     ActivationSoftmaxLossCategoricalCrossEntropy combo;
     CHECK_THROWS_WITH_AS(combo.backward(dvalues, y_true),
@@ -1680,4 +1481,189 @@ TEST_CASE("OptimizerAdam updates momentums and caches with bias correction")
     // Corrected updates
     CHECK(layer.weights(0, 0) == doctest::Approx(0.9).epsilon(1e-6));
     CHECK(layer.biases[0] == doctest::Approx(-0.1).epsilon(1e-6));
+}
+
+// classification_accuracy tests
+TEST_CASE("classification_accuracy computes correct value for sparse labels")
+{
+    Matrix preds(3, 3);
+    preds(0, 0) = 0.7; preds(0, 1) = 0.1; preds(0, 2) = 0.2;
+    preds(1, 0) = 0.1; preds(1, 1) = 0.5; preds(1, 2) = 0.4;
+    preds(2, 0) = 0.2; preds(2, 1) = 0.3; preds(2, 2) = 0.5;
+
+    VecI targets = {0, 1, 2};
+
+    double acc = classification_accuracy(preds, targets);
+    CHECK(acc == doctest::Approx(1.0));
+}
+
+TEST_CASE("classification_accuracy throws on sparse size mismatch")
+{
+    Matrix preds(2, 3);
+    preds(0, 0) = 0.7; preds(0, 1) = 0.2; preds(0, 2) = 0.1;
+    preds(1, 0) = 0.2; preds(1, 1) = 0.3; preds(1, 2) = 0.5;
+
+    VecI targets = {0}; // mismatch
+
+    CHECK_THROWS_WITH_AS(classification_accuracy(preds, targets),
+                         "classification_accuracy: y_pred.rows must match y_true.size()",
+                         runtime_error);
+}
+
+TEST_CASE("classification_accuracy throws on sparse empty predictions")
+{
+    Matrix preds(1, 0);
+    VecI targets = {0};
+    CHECK_THROWS_WITH_AS(classification_accuracy(preds, targets),
+                         "classification_accuracy: y_pred must be non-empty",
+                         runtime_error);
+}
+
+TEST_CASE("classification_accuracy throws on sparse class index out of range")
+{
+    Matrix preds(1, 2);
+    preds(0, 0) = 0.5; preds(0, 1) = 0.5;
+    VecI targets = {2}; // invalid class
+
+    CHECK_THROWS_WITH_AS(classification_accuracy(preds, targets),
+                         "classification_accuracy: class index out of range",
+                         runtime_error);
+}
+
+TEST_CASE("classification_accuracy computes correct value for one-hot labels")
+{
+    Matrix preds(2, 3);
+    preds(0, 0) = 0.6; preds(0, 1) = 0.3; preds(0, 2) = 0.1;
+    preds(1, 0) = 0.2; preds(1, 1) = 0.5; preds(1, 2) = 0.3;
+
+    Matrix targets(2, 3, 0.0);
+    targets(0, 0) = 1.0;
+    targets(1, 1) = 1.0;
+
+    double acc = classification_accuracy(preds, targets);
+    CHECK(acc == doctest::Approx(1.0));
+}
+
+TEST_CASE("classification_accuracy throws on one-hot shape mismatch")
+{
+    Matrix preds(1, 2);
+    preds(0, 0) = 0.5; preds(0, 1) = 0.5;
+
+    Matrix targets(2, 2, 0.0); // mismatched rows
+    targets(0, 0) = 1.0;
+    targets(1, 1) = 1.0;
+
+    CHECK_THROWS_WITH_AS(classification_accuracy(preds, targets),
+                         "classification_accuracy: y_pred and y_true must have the same shape",
+                         runtime_error);
+}
+
+TEST_CASE("classification_accuracy throws on one-hot empty predictions")
+{
+    Matrix preds(0, 0);
+    Matrix targets(0, 0);
+    CHECK_THROWS_WITH_AS(classification_accuracy(preds, targets),
+                         "classification_accuracy: y_pred must be non-empty",
+                         runtime_error);
+}
+
+// binary_accuracy tests
+TEST_CASE("binary_accuracy computes fraction of matching thresholded outputs")
+{
+    Matrix preds(2, 2);
+    preds(0, 0) = 0.6; preds(0, 1) = 0.4;
+    preds(1, 0) = 0.49; preds(1, 1) = 0.51;
+
+    Matrix targets(2, 2);
+    targets(0, 0) = 1.0; targets(0, 1) = 0.0;
+    targets(1, 0) = 1.0; targets(1, 1) = 0.0;
+
+    double acc = binary_accuracy(preds, targets);
+    CHECK(acc == doctest::Approx(0.5)); // 2 of 4 outputs match after thresholding
+}
+
+TEST_CASE("binary_accuracy throws on shape mismatch")
+{
+    Matrix preds(2, 1, 0.6);
+    Matrix targets(1, 1, 1.0);
+
+    CHECK_THROWS_WITH_AS(binary_accuracy(preds, targets),
+                         "binary_accuracy: y_pred and y_true must have the same shape",
+                         runtime_error);
+}
+
+TEST_CASE("binary_accuracy throws when predictions have zero columns")
+{
+    Matrix preds(1, 0);
+    Matrix targets(1, 0);
+
+    CHECK_THROWS_WITH_AS(binary_accuracy(preds, targets),
+                         "binary_accuracy: y_pred must have at least one column",
+                         runtime_error);
+}
+
+// regression_accuracy_precision tests
+TEST_CASE("regression_accuracy_precision computes precision from target stddev")
+{
+    Matrix targets(2, 1);
+    targets(0, 0) = 1.0;
+    targets(1, 0) = 3.0;
+
+    double precision = regression_accuracy_precision(targets, 10.0);
+    CHECK(precision == doctest::Approx(0.1)); // stddev 1.0 / 10
+}
+
+TEST_CASE("regression_accuracy_precision handles zero variance and validates inputs")
+{
+    Matrix constant(3, 1, 5.0);
+    double precision = regression_accuracy_precision(constant, 5.0);
+    CHECK(precision == doctest::Approx(1e-7));
+
+    Matrix empty;
+    empty.assign(0, 0, 0.0);
+    CHECK_THROWS_WITH_AS(regression_accuracy_precision(empty, 5.0),
+                         "regression_accuracy_precision: y_true must be non-empty",
+                         runtime_error);
+
+    Matrix nonempty(1, 1, 0.0);
+    CHECK_THROWS_WITH_AS(regression_accuracy_precision(nonempty, 0.0),
+                         "regression_accuracy: precision_divisor must be positive",
+                         runtime_error);
+}
+
+// regression_accuracy tests
+TEST_CASE("regression_accuracy counts predictions within given precision")
+{
+    Matrix preds(2, 1);
+    preds(0, 0) = 0.10; preds(1, 0) = 0.30;
+
+    Matrix targets(2, 1);
+    targets(0, 0) = 0.11; targets(1, 0) = 0.55;
+
+    double acc = regression_accuracy(preds, targets, 0.05); // only first sample within
+    CHECK(acc == doctest::Approx(0.5));
+}
+
+TEST_CASE("regression_accuracy throws on shape mismatch or invalid precision")
+{
+    Matrix preds(1, 1, 0.1);
+    Matrix targets(2, 1, 0.1);
+
+    CHECK_THROWS_WITH_AS(regression_accuracy(preds, targets, 0.1),
+                         "regression_accuracy: y_pred and y_true must have the same shape",
+                         runtime_error);
+
+    Matrix preds2(1, 1, 0.1);
+    Matrix targets2(1, 1, 0.1);
+    CHECK_THROWS_WITH_AS(regression_accuracy(preds2, targets2, 0.0),
+                         "regression_accuracy: precision must be positive",
+                         runtime_error);
+
+    Matrix empty_preds;
+    empty_preds.assign(0, 0, 0.0);
+    Matrix empty_targets;
+    empty_targets.assign(0, 0, 0.0);
+    CHECK_THROWS_WITH_AS(regression_accuracy(empty_preds, empty_targets, 0.1),
+                         "regression_accuracy: inputs must be non-empty",
+                         runtime_error);
 }
