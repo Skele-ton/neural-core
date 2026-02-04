@@ -9,7 +9,7 @@ TEST_BIN := tests
 TEST_SRC := tests.cpp
 
 GCOVR ?= gcovr --exclude-noncode-lines
-GCOVR_EXCLUDES := --exclude 'doctest.h'
+GCOVR_EXCLUDES := --exclude 'doctest.h' --exclude 'fashion_mnist/.*'
 COVERAGE_FLAGS := -O0 -g --coverage
 
 .PHONY: all run test coverage all-in-one clean clean-coverage
@@ -34,7 +34,7 @@ coverage: clean-coverage
 	PATH="$$HOME/.local/bin:$$PATH" $(GCOVR) -r . $(GCOVR_EXCLUDES)
 	rm -f *.gcda *.gcno
 
-all-in-one: run test coverage
+all-in-one: run coverage
 	@echo "Completed run, test, coverage"
 
 clean: clean-coverage

@@ -13,6 +13,8 @@
 #include <algorithm>
 #include <list>
 
+#include "fashion_mnist/mnist_reader.hpp"
+
 using std::cout;
 using std::ofstream;
 using std::runtime_error;
@@ -24,6 +26,7 @@ using std::normal_distribution;
 using std::uniform_real_distribution;
 using std::fixed;
 using std::setprecision;
+using std::swap;
 using std::min;
 using std::max;
 using std::round;
@@ -38,12 +41,12 @@ using std::log;
 using std::isfinite;
 using std::is_same_v;
 
-static inline bool is_whole_number(double v, double epsilon = 1e-7)
+inline bool is_whole_number(double v, double epsilon = 1e-7)
 {
     return abs(v - round(v)) <= epsilon;
 }
 
-static inline void multiplication_overflow_check(const size_t a, const size_t b, const char* error_msg) {
+inline void multiplication_overflow_check(const size_t a, const size_t b, const char* error_msg) {
     if (a != 0 && b > numeric_limits<size_t>::max() / a) {
         throw runtime_error(error_msg);
     }
@@ -291,9 +294,78 @@ public:
 
         return result;
     }
+
+    // method for shuffling input data, where the base matrix is 2D and y is it's 1D labels
+    void shuffle_rows_with(Matrix& y)
+    {
+        require_non_empty("shuffle_rows_with: base matrix must be non-empty");
+
+        const bool y_row = (y.rows == 1 && y.cols == rows);
+        const bool y_col = (y.cols == 1 && y.rows == rows);
+        if (!y_row && !y_col) {
+            throw runtime_error("shuffle_rows_with: y must be shape (1,N) or (N,1), where N = base matrix rows");
+        }
+
+        if (rows < 2) return;
+
+        for (size_t i = rows - 1; i > 0; --i) {
+            std::uniform_int_distribution<size_t> dist(0, i);
+            const size_t j = dist(g_rng);
+            if (i == j) continue;
+
+            for (size_t c = 0; c < cols; ++c) {
+                swap((*this)(i, c), (*this)(j, c));
+            }
+
+            if (y_row) {
+                swap(y(0, i), y(0, j));
+            } else {
+                swap(y(i, 0), y(j, 0));
+            }
+        }
+    }
 };
 
 // training data
+void fashion_mnist_create(
+    Matrix& X_train_out, Matrix& y_train_out,
+    Matrix& X_test_out,  Matrix& y_test_out,
+    const string& dir = "fashion_mnist")
+{
+    auto dataset = mnist::read_dataset<std::vector, std::vector, uint8_t, uint8_t>(dir);
+
+    const size_t train_samples = dataset.training_images.size();
+    const size_t test_samples  = dataset.test_images.size();
+    const size_t features = 784; // 28x28 pixels per image
+
+    X_train_out.assign(train_samples, features);
+    y_train_out.assign(train_samples, 1);
+    X_test_out.assign(test_samples, features);
+    y_test_out.assign(test_samples, 1);
+
+    // converting the loaded data from the dataset into matrices and normalizing values to [-1, 1]
+    for (size_t i = 0; i < train_samples; ++i) {
+        for (size_t j = 0; j < features; ++j) {
+            double pixel = static_cast<double>(dataset.training_images[i][j]);
+            X_train_out(i, j) = (pixel - 127.5) / 127.5;
+        }
+
+        y_train_out(i, 0) = static_cast<double>(dataset.training_labels[i]);
+    }
+
+    // same for the test data
+    for (size_t i = 0; i < test_samples; ++i) {
+        for (size_t j = 0; j < features; ++j) {
+            double pixel = static_cast<double>(dataset.test_images[i][j]);
+            X_test_out(i, j) = (pixel - 127.5) / 127.5;
+        }
+        y_test_out(i, 0) = static_cast<double>(dataset.test_labels[i]);
+    }
+
+    X_train_out.shuffle_rows_with(y_train_out);
+    X_test_out.shuffle_rows_with(y_test_out);
+}
+
 void generate_spiral_data(size_t samples_per_class, size_t classes, Matrix& X_out, Matrix& y_out)
 {
     if (samples_per_class <= 1 || classes == 0) {
@@ -978,7 +1050,6 @@ public:
         accumulated_count = 0;
     }
 
-    // if no parameter is passed the method goes over the trainable layers saved in the class
     double regularization_loss_self() const
     {
         double regularization = 0.0;
@@ -2117,21 +2188,22 @@ int main()
 {
     Matrix X;
     Matrix y;
-    generate_spiral_data(100, 3, X, y);
+    Matrix X_test;
+    Matrix y_test;
 
-    plot_scatter_svg("plot.svg", X, y);
+    fashion_mnist_create(X, y, X_test, y_test);
 
-    LayerDense dense1(2, 64, 0.0, 5e-4, 0.0, 5e-4);
+    LayerDense dense1(X.cols, 128, 0.0, 5e-4, 0.0, 5e-4);
     ActivationReLU activation1;
 
-    LayerDense dense2(64, 64, 0.0, 5e-4, 0.0, 5e-4);
+    LayerDense dense2(128, 128, 0.0, 5e-4, 0.0, 5e-4);
     ActivationReLU activation2;
 
-    LayerDense dense3(64, 3);
+    LayerDense dense3(128, 10);
     ActivationSoftmax activation3;
 
     LossCategoricalCrossEntropy loss_function;
-    OptimizerAdam optimizer(0.005, 1e-3);
+    OptimizerAdam optimizer(1e-3);
     AccuracyCategorical accuracy;
 
     Model model;
@@ -2144,12 +2216,12 @@ int main()
     model.set(loss_function, optimizer, accuracy);
     model.finalize();
 
-    model.train(X, y, 100, 32, 10);
+    model.train(X, y, 1, 128, 100, &X_test, &y_test);
 
-    Matrix X_test;
-    Matrix y_test;
-    generate_spiral_data(50, 3, X_test, y_test);
-    model.evaluate(X_test, y_test, 32);
+    cout << "extra validation after shuffling to check if the model assumes sorted labels:\n";
+    X_test.shuffle_rows_with(y_test);
+    model.evaluate(X_test, y_test, 128);
+
     return 0;
 }
 #endif

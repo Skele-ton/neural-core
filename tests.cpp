@@ -284,6 +284,86 @@ TEST_CASE("Matrix dot multiplies matrices and validates shapes")
                          runtime_error);
 }
 
+TEST_CASE("Matrix shuffle_rows_with validates inputs and shuffles with row/col labels")
+{
+    Matrix empty;
+    Matrix y_empty(1, 1, 0.0);
+    CHECK_THROWS_WITH_AS(empty.shuffle_rows_with(y_empty),
+                         "shuffle_rows_with: base matrix must be non-empty",
+                         runtime_error);
+
+    Matrix X(3, 2);
+    X(0, 0) = 10.0; X(0, 1) = 11.0;
+    X(1, 0) = 20.0; X(1, 1) = 21.0;
+    X(2, 0) = 30.0; X(2, 1) = 31.0;
+
+    Matrix bad_y(2, 2, 0.0);
+    CHECK_THROWS_WITH_AS(X.shuffle_rows_with(bad_y),
+                         "shuffle_rows_with: y must be shape (1,N) or (N,1), where N = base matrix rows",
+                         runtime_error);
+
+    Matrix X_row = X;
+    Matrix y_row(1, 3);
+    y_row(0, 0) = 0.0; y_row(0, 1) = 1.0; y_row(0, 2) = 2.0;
+    g_rng.seed(0);
+    X_row.shuffle_rows_with(y_row);
+    for (size_t i = 0; i < X_row.rows; ++i) {
+        const size_t label = y_row.as_size_t(0, i);
+        CHECK(X_row(i, 0) == doctest::Approx((label + 1) * 10.0));
+        CHECK(X_row(i, 1) == doctest::Approx((label + 1) * 10.0 + 1.0));
+    }
+
+    Matrix X_col = X;
+    Matrix y_col(3, 1);
+    y_col(0, 0) = 0.0; y_col(1, 0) = 1.0; y_col(2, 0) = 2.0;
+    g_rng.seed(0);
+    X_col.shuffle_rows_with(y_col);
+    for (size_t i = 0; i < X_col.rows; ++i) {
+        const size_t label = y_col.as_size_t(i, 0);
+        CHECK(X_col(i, 0) == doctest::Approx((label + 1) * 10.0));
+        CHECK(X_col(i, 1) == doctest::Approx((label + 1) * 10.0 + 1.0));
+    }
+
+    // rows < 2 early return branch
+    Matrix X_one(1, 2);
+    X_one(0, 0) = 7.0; X_one(0, 1) = 8.0;
+    Matrix y_one(1, 1, 3.0);
+    X_one.shuffle_rows_with(y_one);
+    CHECK(X_one(0, 0) == doctest::Approx(7.0));
+    CHECK(y_one(0, 0) == doctest::Approx(3.0));
+}
+
+// === fashion_mnist_create ===
+TEST_CASE("fashion_mnist_create loads and normalizes data")
+{
+    Matrix X_train;
+    Matrix y_train;
+    Matrix X_test;
+    Matrix y_test;
+
+    fashion_mnist_create(X_train, y_train, X_test, y_test);
+
+    CHECK(X_train.rows > 0);
+    CHECK(X_test.rows > 0);
+    CHECK(X_train.cols == 784);
+    CHECK(X_test.cols == 784);
+    CHECK(y_train.rows == X_train.rows);
+    CHECK(y_test.rows == X_test.rows);
+    CHECK(y_train.cols == 1);
+    CHECK(y_test.cols == 1);
+
+    const size_t max_train_rows = min<size_t>(X_train.rows, 5);
+    for (size_t i = 0; i < max_train_rows; ++i) {
+        for (size_t j = 0; j < 10; ++j) {
+            CHECK(isfinite(X_train(i, j)));
+            CHECK(X_train(i, j) >= -1.0);
+            CHECK(X_train(i, j) <= 1.0);
+        }
+        const size_t label = y_train.as_size_t(i, 0);
+        CHECK(label < 10);
+    }
+}
+
 // === generate_spiral_data ===
 TEST_CASE("generate_spiral_data validates arguments and overflow")
 {
