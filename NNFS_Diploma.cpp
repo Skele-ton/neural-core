@@ -5,13 +5,9 @@
 #include <random>
 #include <cmath>
 #include <limits>
-#include <cstdio>
 #include <string>
 #include <fstream>
-#include <type_traits>
-#include <functional>
 #include <algorithm>
-#include <list>
 
 #include "fashion_mnist/mnist_reader.hpp"
 
@@ -31,7 +27,6 @@ using std::min;
 using std::max;
 using std::round;
 using std::sqrt;
-using std::pow;
 using std::abs;
 using std::sin;
 using std::cos;
@@ -39,7 +34,6 @@ using std::acos;
 using std::exp;
 using std::log;
 using std::isfinite;
-using std::is_same_v;
 
 inline bool is_whole_number(double v, double epsilon = 1e-7)
 {
@@ -52,7 +46,14 @@ inline void multiplication_overflow_check(const size_t a, const size_t b, const 
     }
 }
 
+// TODO: make varaibles for classes private and add getters/setters where needed
+// TODO: standardize the labels of the data plotting somehow (make the middle equal 0 or something similar)
 // TODO: Make rng implementation thread-safe
+// TODO: add predict method to the model class
+// TODO: add get_params, set_params, save_params, load_params, save, load methods to the model class
+//       maybe find a cpp library for reading/writing objects to files
+// TODO: seperate project into multiple files
+
 
 // global RNG
 mt19937 g_rng(0);
@@ -579,8 +580,220 @@ void plot_scatter_svg(const string& path, const Matrix& points, const Matrix& la
     out << "</svg>\n";
 }
 
-// Dense layer with weights/biases and cached inputs/output
-class LayerDense
+// activations
+class Activation
+{
+public:
+    Matrix inputs;
+    Matrix output;
+    Matrix dinputs;
+
+    virtual ~Activation() = default;
+
+    virtual void forward(const Matrix& inputs_batch) = 0;
+    virtual void backward(const Matrix& dvalues) = 0;
+    virtual Matrix predictions(const Matrix& outputs) const = 0;
+};
+
+class ActivationReLU : public Activation
+{
+public:
+
+    void forward(const Matrix& inputs_batch) override
+    {
+        inputs_batch.require_non_empty("ActivationReLU::forward: inputs must be non-empty");
+
+        inputs = inputs_batch;
+        output.assign(inputs.rows, inputs.cols);
+        for (size_t i = 0; i < inputs.rows; ++i) {
+            for (size_t j = 0; j < inputs.cols; ++j) {
+                output(i, j) = max(0.0, inputs(i, j));
+            }
+        }
+    }
+
+    void backward(const Matrix& dvalues) override
+    {
+        dvalues.require_non_empty("ActivationReLU::backward: dvalues must be non-empty");
+        dvalues.require_shape(inputs.rows, inputs.cols,
+            "ActivationReLU::backward: dvalues shape mismatch");
+
+        dinputs = dvalues;
+        for (size_t i = 0; i < inputs.rows; ++i) {
+            for (size_t j = 0; j < inputs.cols; ++j) {
+                if (inputs(i, j) <= 0.0) {
+                    dinputs(i, j) = 0.0;
+                }
+            }
+        }
+    }
+
+    Matrix predictions(const Matrix& outputs) const override { return outputs; }
+};
+
+// Softmax activation
+class ActivationSoftmax : public Activation
+{
+public:
+    void forward(const Matrix& inputs_batch) override
+    {
+        inputs_batch.require_non_empty("ActivationSoftmax::forward: inputs must be non-empty");
+
+        inputs = inputs_batch;
+        output.assign(inputs.rows, inputs.cols);
+
+        for (size_t i = 0; i < inputs.rows; ++i) {
+            double max_val = inputs(i, 0);
+            for (size_t j = 1; j < inputs.cols; ++j) {
+                double v = inputs(i, j);
+                if (v > max_val) max_val = v;
+            }
+
+            double sum = 0.0;
+            for (size_t j = 0; j < inputs.cols; ++j) {
+                double e = exp(inputs(i, j) - max_val);
+                output(i, j) = e;
+                sum += e;
+            }
+
+            if (!isfinite(sum) || sum <= 0.0) {
+                throw runtime_error("ActivationSoftmax: invalid sum of exponentials");
+            }
+
+            for (size_t j = 0; j < inputs.cols; ++j) {
+                output(i, j) /= sum;
+            }
+        }
+    }
+
+    void backward(const Matrix& dvalues) override
+    {
+        dvalues.require_non_empty("ActivationSoftmax::backward: dvalues must be non-empty");
+        dvalues.require_shape(output.rows, output.cols,
+            "ActivationSoftmax::backward: dvalues shape mismatch");
+
+        dinputs.assign(dvalues.rows, dvalues.cols);
+
+        const size_t samples = dvalues.rows;
+        const size_t classes = dvalues.cols;
+
+        for (size_t i = 0; i < samples; ++i) { // O(C) per sample
+            double alpha = 0.0;
+            for (size_t k = 0; k < classes; ++k) {
+                alpha += output(i, k) * dvalues(i, k);
+            }
+            for (size_t j = 0; j < classes; ++j) {
+                dinputs(i, j) = output(i, j) * (dvalues(i, j) - alpha);
+            }
+        }
+    }
+
+    Matrix predictions(const Matrix& outputs) const override
+    {
+        outputs.require_non_empty("ActivationSoftmax::predictions: outputs must be non-empty");
+        if(outputs.cols < 2) {
+            throw runtime_error("ActivationSoftmax::predictions: computation of softmax predictions requires outputs.cols >= 2");
+        }
+
+        return outputs.argmax();
+    }
+};
+
+// Sigmoid activation
+class ActivationSigmoid : public Activation
+{
+public:
+    void forward(const Matrix& inputs_batch) override
+    {
+        inputs_batch.require_non_empty("ActivationSigmoid::forward: inputs must be non-empty");
+
+        inputs = inputs_batch;
+        output.assign(inputs.rows, inputs.cols);
+        for (size_t i = 0; i < inputs.rows; ++i) {
+            for (size_t j = 0; j < inputs.cols; ++j) {
+                // stable sigmoid - prevents overflow for large negative values
+                const double inp = inputs(i, j);
+
+                if (inp >= 0) {
+                    output(i, j) = 1.0 / (1.0 + exp(-inp));
+                } else {
+                    const double inp_exp = exp(inp);
+                    output(i, j) = inp_exp / (1.0 + inp_exp);
+                }
+            }
+        }
+    }
+
+    void backward(const Matrix& dvalues) override
+    {
+        dvalues.require_non_empty("ActivationSigmoid::backward: dvalues must be non-empty");
+        dvalues.require_shape(output.rows, output.cols,
+            "ActivationSigmoid::backward: dvalues shape mismatch");
+
+        dinputs.assign(dvalues.rows, dvalues.cols);
+        for (size_t i = 0; i < dvalues.rows; ++i) {
+            for (size_t j = 0; j < dvalues.cols; ++j) {
+                const double s = output(i, j);
+                dinputs(i, j) = dvalues(i, j) * (1.0 - s) * s;
+            }
+        }
+    }
+
+    Matrix predictions(const Matrix& outputs) const override
+    {
+        outputs.require_non_empty("ActivationSigmoid::predictions: outputs must be non-empty");
+
+        Matrix preds(outputs.rows, outputs.cols);
+        for (size_t i = 0; i < outputs.rows; ++i) {
+            for (size_t j = 0; j < outputs.cols; ++j) {
+                preds(i, j) = outputs(i, j) > 0.5 ? 1.0 : 0.0;
+            }
+        }
+        return preds;
+    }
+};
+
+// Linear activation (identity)
+class ActivationLinear : public Activation
+{
+public:
+    void forward(const Matrix& inputs_batch) override
+    {
+        inputs_batch.require_non_empty("ActivationLinear::forward: inputs must be non-empty");
+
+        inputs = inputs_batch;
+        output = inputs_batch;
+    }
+
+    void backward(const Matrix& dvalues) override
+    {
+        dvalues.require_non_empty("ActivationLinear::backward: dvalues must be non-empty");
+        dvalues.require_shape(inputs.rows, inputs.cols,
+            "ActivationLinear::backward: dvalues shape mismatch");
+        
+        dinputs = dvalues;
+    }
+
+    Matrix predictions(const Matrix& outputs) const override { return outputs; }
+};
+
+// layers
+class Layer
+{
+public:
+    Matrix inputs;
+    Matrix output;
+    Matrix dinputs;
+    Activation* activation = nullptr;
+
+    virtual ~Layer() = default;
+
+    virtual void forward(const Matrix& inputs_batch, bool training) = 0;
+    virtual void backward(const Matrix& dvalues, bool include_activation = true) = 0;
+};
+
+// dense layer with weights/biases and cached inputs/output
+class LayerDense : public Layer
 {
 public:
     Matrix weights;
@@ -596,14 +809,10 @@ public:
     Matrix weight_cache;
     Matrix bias_cache;
 
-    Matrix output;
-    Matrix inputs;
-
     Matrix dweights;
     Matrix dbiases;
-    Matrix dinputs;
 
-    LayerDense(size_t n_inputs, size_t n_neurons,
+    LayerDense(size_t n_inputs, size_t n_neurons, Activation& activation_fn,
                double weight_regularizer_l1 = 0.0,
                double weight_regularizer_l2 = 0.0,
                double bias_regularizer_l1 = 0.0,
@@ -613,9 +822,7 @@ public:
           weight_regularizer_l1(weight_regularizer_l1),
           weight_regularizer_l2(weight_regularizer_l2),
           bias_regularizer_l1(bias_regularizer_l1),
-          bias_regularizer_l2(bias_regularizer_l2),
-          output(),
-          inputs()
+          bias_regularizer_l2(bias_regularizer_l2)
     {
         if (weight_regularizer_l1 < 0.0 || weight_regularizer_l2 < 0.0 ||
             bias_regularizer_l1 < 0.0 || bias_regularizer_l2 < 0.0) {
@@ -625,6 +832,8 @@ public:
         if(n_inputs == 0 || n_neurons == 0) {
             throw runtime_error("LayerDense:  n_inputs and n_neurons must be > 0");
         }
+
+        activation = &activation_fn;
 
         for (size_t input = 0; input < n_inputs; ++input) {
             for (size_t neuron = 0; neuron < n_neurons; ++neuron) {
@@ -650,24 +859,41 @@ public:
                 output(i, j) += biases(0, j);
             }
         }
+
+        if (!activation) {
+            throw runtime_error("LayerDense::forward: activation must be set");
+        }
+        activation->forward(output);
+        output = activation->output;
     }
     
-    // overload for dropout layer
-    void forward(const Matrix& inputs_batch, bool) { forward(inputs_batch); }
+    // forward overload for dropout layer
+    void forward(const Matrix& inputs_batch, bool) override { forward(inputs_batch); }
 
-    void backward(const Matrix& dvalues)
+    void backward(const Matrix& dvalues, bool include_activation) override
     {
         dvalues.require_non_empty("LayerDense::backward: dvalues must be non-empty");
         dvalues.require_shape(inputs.rows, weights.cols,
             "LayerDense::backward: dvalues shape mismatch");
 
+        Matrix dactivation;
+        if (include_activation) {
+            if (!activation) {
+                throw runtime_error("LayerDense::backward: activation must be set");
+            }
+            activation->backward(dvalues);
+            dactivation = activation->dinputs;
+        } else {
+            dactivation = dvalues;
+        }
+        
         const Matrix inputs_T = inputs.transpose();
-        dweights = Matrix::dot(inputs_T, dvalues);
+        dweights = Matrix::dot(inputs_T, dactivation);
 
         dbiases.assign(1, biases.cols, 0.0);
-        for (size_t i = 0; i < dvalues.rows; ++i) {
-            for (size_t j = 0; j < dvalues.cols; ++j) {
-                dbiases(0, j) += dvalues(i, j);
+        for (size_t i = 0; i < dactivation.rows; ++i) {
+            for (size_t j = 0; j < dactivation.cols; ++j) {
+                dbiases(0, j) += dactivation(i, j);
             }
         }
 
@@ -703,19 +929,17 @@ public:
         }
 
         const Matrix weights_T = weights.transpose();
-        dinputs = Matrix::dot(dvalues, weights_T);
+        dinputs = Matrix::dot(dactivation, weights_T);
     }
 };
 
-// Dropout layer
-class LayerDropout
+// dropout layer
+class LayerDropout : public Layer
 {
 public:
     double keep_rate;
     Matrix scaled_binary_mask;
-    Matrix output;
-    Matrix inputs;
-    Matrix dinputs;
+    ActivationLinear activation_linear;
 
     explicit LayerDropout(double rate)
         : keep_rate(1.0 - rate)
@@ -723,9 +947,11 @@ public:
         if (keep_rate <= 0.0 || keep_rate > 1.0) {
             throw runtime_error("LayerDropout: rate must be in (0,1]");
         }
+
+        activation = &activation_linear;
     }
 
-    void forward(const Matrix& inputs_batch, bool training = true)
+    void forward(const Matrix& inputs_batch, bool training = true) override
     {
         inputs_batch.require_non_empty("LayerDropout::forward: inputs must be non-empty");
 
@@ -741,249 +967,51 @@ public:
                 output(i, j) = inputs(i, j) * mask;
             }
         }
+
+        if (!activation) {
+            throw runtime_error("LayerDropout::forward: activation must be set");
+        }
+        activation->forward(output);
+        output = activation->output;
     }
 
-    void backward(const Matrix& dvalues)
+    void backward(const Matrix& dvalues, bool include_activation) override
     {
         dvalues.require_non_empty("LayerDropout::backward: dvalues must be non-empty");
         dvalues.require_shape(scaled_binary_mask.rows, scaled_binary_mask.cols,
             "LayerDropout::backward: dvalues shape mismatch");
 
-        dinputs.assign(dvalues.rows, dvalues.cols);
-        for (size_t i = 0; i < dvalues.rows; ++i) {
-            for (size_t j = 0; j < dvalues.cols; ++j) {
-                dinputs(i, j) = dvalues(i, j) * scaled_binary_mask(i, j);
+        Matrix dactivation;
+        if (include_activation) {
+            if (!activation) {
+                throw runtime_error("LayerDropout::backward: activation must be set");
+            }
+            activation->backward(dvalues);
+            dactivation = activation->dinputs;
+        } else {
+            dactivation = dvalues;
+        }
+
+        dinputs.assign(dactivation.rows, dactivation.cols);
+        for (size_t i = 0; i < dactivation.rows; ++i) {
+            for (size_t j = 0; j < dactivation.cols; ++j) {
+                dinputs(i, j) = dactivation(i, j) * scaled_binary_mask(i, j);
             }
         }
     }
 };
 
-// Input "layer" to provide consistent interface for model
+// input "layer" for storing inputs into the model. Doesn't inherit from the base layer class
 class LayerInput
 {
 public:
-    Matrix input;
     Matrix output;
 
     void forward(const Matrix& inputs_batch)
     {
         inputs_batch.require_non_empty("LayerInput::forward: inputs must be non-empty");
-        input = inputs_batch;
         output = inputs_batch;
     }
-
-    // overload for dropout layer
-    void forward(const Matrix& inputs_batch, bool) { forward(inputs_batch); }
-};
-
-// activations
-class ActivationReLU
-{
-public:
-    Matrix inputs;
-    Matrix output;
-    Matrix dinputs;
-
-    void forward(const Matrix& inputs_batch)
-    {
-        inputs_batch.require_non_empty("ActivationReLU::forward: inputs must be non-empty");
-
-        inputs = inputs_batch;
-        output.assign(inputs.rows, inputs.cols);
-        for (size_t i = 0; i < inputs.rows; ++i) {
-            for (size_t j = 0; j < inputs.cols; ++j) {
-                output(i, j) = max(0.0, inputs(i, j));
-            }
-        }
-    }
-
-    // overload for dropout layer
-    void forward(const Matrix& inputs_batch, bool) { forward(inputs_batch); }
-
-    void backward(const Matrix& dvalues)
-    {
-        dvalues.require_non_empty("ActivationReLU::backward: dvalues must be non-empty");
-        dvalues.require_shape(inputs.rows, inputs.cols,
-            "ActivationReLU::backward: dvalues shape mismatch");
-
-        dinputs = dvalues;
-        for (size_t i = 0; i < inputs.rows; ++i) {
-            for (size_t j = 0; j < inputs.cols; ++j) {
-                if (inputs(i, j) <= 0.0) {
-                    dinputs(i, j) = 0.0;
-                }
-            }
-        }
-    }
-
-    Matrix predictions(const Matrix& outputs) const { return outputs; }
-};
-
-// Softmax activation
-class ActivationSoftmax
-{
-public:
-    Matrix inputs;
-    Matrix output;
-    Matrix dinputs;
-
-    void forward(const Matrix& inputs_batch)
-    {
-        inputs_batch.require_non_empty("ActivationSoftmax::forward: inputs must be non-empty");
-
-        inputs = inputs_batch;
-        output.assign(inputs.rows, inputs.cols);
-
-        for (size_t i = 0; i < inputs.rows; ++i) {
-            double max_val = inputs(i, 0);
-            for (size_t j = 1; j < inputs.cols; ++j) {
-                double v = inputs(i, j);
-                if (v > max_val) max_val = v;
-            }
-
-            double sum = 0.0;
-            for (size_t j = 0; j < inputs.cols; ++j) {
-                double e = exp(inputs(i, j) - max_val);
-                output(i, j) = e;
-                sum += e;
-            }
-
-            if (!isfinite(sum) || sum <= 0.0) {
-                throw runtime_error("ActivationSoftmax: invalid sum of exponentials");
-            }
-
-            for (size_t j = 0; j < inputs.cols; ++j) {
-                output(i, j) /= sum;
-            }
-        }
-    }
-
-    // overload for dropout layer
-    void forward(const Matrix& inputs_batch, bool) { forward(inputs_batch); }
-
-    void backward(const Matrix& dvalues)
-    {
-        dvalues.require_non_empty("ActivationSoftmax::backward: dvalues must be non-empty");
-        dvalues.require_shape(output.rows, output.cols,
-            "ActivationSoftmax::backward: dvalues shape mismatch");
-
-        dinputs.assign(dvalues.rows, dvalues.cols);
-
-        const size_t samples = dvalues.rows;
-        const size_t classes = dvalues.cols;
-
-        for (size_t i = 0; i < samples; ++i) { // O(C) per sample
-            double alpha = 0.0;
-            for (size_t k = 0; k < classes; ++k) {
-                alpha += output(i, k) * dvalues(i, k);
-            }
-            for (size_t j = 0; j < classes; ++j) {
-                dinputs(i, j) = output(i, j) * (dvalues(i, j) - alpha);
-            }
-        }
-    }
-
-    Matrix predictions(const Matrix& outputs) const
-    {
-        outputs.require_non_empty("ActivationSoftmax::predictions: outputs must be non-empty");
-        if(outputs.cols < 2) {
-            throw runtime_error("ActivationSoftmax::predictions: computation of softmax predictions requires outputs.cols >= 2");
-        }
-
-        return outputs.argmax();
-    }
-};
-
-// Sigmoid activation
-class ActivationSigmoid
-{
-public:
-    Matrix inputs;
-    Matrix output;
-    Matrix dinputs;
-
-    void forward(const Matrix& inputs_batch)
-    {
-        inputs_batch.require_non_empty("ActivationSigmoid::forward: inputs must be non-empty");
-
-        inputs = inputs_batch;
-        output.assign(inputs.rows, inputs.cols);
-        for (size_t i = 0; i < inputs.rows; ++i) {
-            for (size_t j = 0; j < inputs.cols; ++j) {
-                // stable sigmoid - prevents overflow for large negative values
-                const double inp = inputs(i, j);
-
-                if (inp >= 0) {
-                    output(i, j) = 1.0 / (1.0 + exp(-inp));
-                } else {
-                    const double inp_exp = exp(inp);
-                    output(i, j) = inp_exp / (1.0 + inp_exp);
-                }
-            }
-        }
-    }
-
-    // overload for dropout layer
-    void forward(const Matrix& inputs_batch, bool) { forward(inputs_batch); }
-
-    void backward(const Matrix& dvalues)
-    {
-        dvalues.require_non_empty("ActivationSigmoid::backward: dvalues must be non-empty");
-        dvalues.require_shape(output.rows, output.cols,
-            "ActivationSigmoid::backward: dvalues shape mismatch");
-
-        dinputs.assign(dvalues.rows, dvalues.cols);
-        for (size_t i = 0; i < dvalues.rows; ++i) {
-            for (size_t j = 0; j < dvalues.cols; ++j) {
-                const double s = output(i, j);
-                dinputs(i, j) = dvalues(i, j) * (1.0 - s) * s;
-            }
-        }
-    }
-
-    Matrix predictions(const Matrix& outputs) const
-    {
-        outputs.require_non_empty("ActivationSigmoid::predictions: outputs must be non-empty");
-
-        Matrix preds(outputs.rows, outputs.cols);
-        for (size_t i = 0; i < outputs.rows; ++i) {
-            for (size_t j = 0; j < outputs.cols; ++j) {
-                preds(i, j) = outputs(i, j) > 0.5 ? 1.0 : 0.0;
-            }
-        }
-        return preds;
-    }
-};
-
-// Linear activation (identity)
-class ActivationLinear
-{
-public:
-    Matrix inputs;
-    Matrix output;
-    Matrix dinputs;
-
-    void forward(const Matrix& inputs_batch)
-    {
-        inputs_batch.require_non_empty("ActivationLinear::forward: inputs must be non-empty");
-
-        inputs = inputs_batch;
-        output = inputs_batch;
-    }
-
-    // overload for dropout layer
-    void forward(const Matrix& inputs_batch, bool) { forward(inputs_batch); }
-
-    void backward(const Matrix& dvalues)
-    {
-        dvalues.require_non_empty("ActivationLinear::backward: dvalues must be non-empty");
-        dvalues.require_shape(inputs.rows, inputs.cols,
-            "ActivationLinear::backward: dvalues shape mismatch");
-        
-        dinputs = dvalues;
-    }
-
-    Matrix predictions(const Matrix& outputs) const { return outputs; }
 };
 
 // loss functions
@@ -1933,70 +1961,47 @@ private:
 class Model
 {
 public:
-    struct LayerHandle
-    {
-        std::function<void(const Matrix&, bool)> forward;
-        std::function<void(const Matrix&)> backward;
-        std::function<const Matrix&()> output;
-        std::function<const Matrix&()> dinputs;
-        std::function<Matrix(const Matrix&)> predictions;
-        bool output_is_softmax = false;
-    };
-
     LayerInput input_layer;
-    std::vector<LayerHandle> layers;
+    std::vector<Layer*> layers;
     std::vector<LayerDense*> trainable_layers;
 
     Loss* loss = nullptr;
     bool loss_is_cce = false;
-    Optimizer* optimizer = nullptr;
     Accuracy* accuracy = nullptr;
+    Optimizer* optimizer = nullptr;
     bool finalized = false;
 
     Matrix output;
     Matrix last_predictions;
 
-    template <typename LayerType>
-    void add(LayerType& layer)
+    void add(Layer& layer)
     {
-        LayerHandle handle;
-
-        handle.forward = [&layer](const Matrix& inputs, bool training) { layer.forward(inputs, training); };
-        handle.backward = [&layer](const Matrix& dvalues) { layer.backward(dvalues); };
-        handle.output = [&layer]() -> const Matrix& { return layer.output; };
-        handle.dinputs = [&layer]() -> const Matrix& { return layer.dinputs; };
-
-        if constexpr (is_same_v<LayerType, ActivationSoftmax> ||
-                      is_same_v<LayerType, ActivationSigmoid> ||
-                      is_same_v<LayerType, ActivationLinear> ||
-                      is_same_v<LayerType, ActivationReLU>) {
-            handle.predictions = [&layer](const Matrix& outputs) -> Matrix { return layer.predictions(outputs); };
-        } else {
-            handle.predictions = [](const Matrix& outputs) -> Matrix { return outputs; };
-        }
-
-        handle.output_is_softmax = is_same_v<LayerType, ActivationSoftmax>;
-
-        layers.push_back(handle);
-
-        if constexpr (is_same_v<LayerType, LayerDense>) {
-            trainable_layers.push_back(&layer);
+        layers.push_back(&layer);
+        if (auto* dense = dynamic_cast<LayerDense*>(&layer)) {
+            // currently trainable layers check only for dense layers
+            // if any other layer types (outside of dropout) are added later this method would need to be updated
+            trainable_layers.push_back(dense);
         }
     }
 
-    void set(Loss& loss_obj, Optimizer& optimizer_obj, Accuracy& accuracy_obj)
+    void set(Loss& loss_obj, Accuracy& accuracy_obj, Optimizer* optimizer_obj = nullptr)
     {
         loss = &loss_obj;
-        optimizer = &optimizer_obj;
         accuracy = &accuracy_obj;
+        optimizer = optimizer_obj;        
 
         loss_is_cce = (dynamic_cast<LossCategoricalCrossEntropy*>(loss) != nullptr);
     }
 
+    void set(Loss& loss_obj, Accuracy& accuracy_obj, Optimizer& optimizer_obj)
+    {
+        set(loss_obj, accuracy_obj, &optimizer_obj);
+    }
+
     void finalize()
     {
-        if (!loss || !optimizer || !accuracy) {
-            throw runtime_error("Model::finalize: loss, optimizer, and accuracy must be set");
+        if (!loss || !accuracy) {
+            throw runtime_error("Model::finalize: loss and accuracy must be set");
         }
         if (layers.empty()) {
             throw runtime_error("Model::finalize: no layers added");
@@ -2009,8 +2014,11 @@ public:
     void train(const Matrix& X, const Matrix& y, size_t epochs = 1, size_t batch_size = 0,
                size_t print_every = 100, const Matrix* X_val = nullptr, const Matrix* y_val = nullptr)
     {
-        if (!loss || !optimizer || !accuracy) {
-            throw runtime_error("Model::train: loss, optimizer, and accuracy must be set");
+        if (!loss || !accuracy) {
+            throw runtime_error("Model::train: loss and accuracy must be set");
+        }
+        if (!optimizer) {
+            throw runtime_error("Model::train: optimizer must be set");
         }
         if (layers.empty()) {
             throw runtime_error("Model::train: no layers added");
@@ -2056,26 +2064,35 @@ public:
                 const double data_loss = loss->calculate(output, batch_y, reg_loss);
                 const double total_loss = data_loss + reg_loss;
 
-                last_predictions = layers.back().predictions(output);
+                last_predictions = predictions_from_output(output);
                 const double acc = accuracy->calculate(last_predictions, batch_y);
 
                 // backward pass
-                const bool use_combined = layers.back().output_is_softmax && loss_is_cce;
+                const bool use_combined = output_is_softmax() && loss_is_cce;
                 const Matrix* dvalues;
-                auto it = layers.rbegin();
+                auto iter = layers.rbegin();
 
                 if (use_combined) {
                     combined_softmax_ce.backward(output, batch_y);
                     dvalues = &combined_softmax_ce.dinputs;
-                    ++it;
+
+                    Layer* last_layer = *iter;
+                    auto* last_dense = dynamic_cast<LayerDense*>(last_layer);
+                    if (!last_dense) {
+                        throw runtime_error("Model::train: combined softmax loss requires final layer to be LayerDense");
+                    }
+
+                    last_dense->backward(*dvalues, false);
+                    dvalues = &last_dense->dinputs;
+                    ++iter;
                 } else {
                     loss->backward(output, batch_y);
                     dvalues = &loss->dinputs;
                 }
 
-                for (; it != layers.rend(); ++it) {
-                    it->backward(*dvalues);
-                    dvalues = &it->dinputs();
+                for (; iter != layers.rend(); ++iter) {
+                    (*iter)->backward(*dvalues);
+                    dvalues = &(*iter)->dinputs;
                 }
 
                 // using optimizers
@@ -2087,13 +2104,13 @@ public:
 
                 // printing
                 if (print_every != 0 && ((step % print_every) == 0 || step == steps - 1)) {
-                    cout << "step: " << step
-                         << ", acc: " << acc
+                    cout << "  step: " << step
+                         << ", accuracy: " << acc
                          << ", loss: " << total_loss
-                         << " (data_loss: " << data_loss
-                         << ", reg_loss: " << reg_loss
+                         << " (data loss: " << data_loss
+                         << ", regularization loss: " << reg_loss
                          << ")"
-                         << ", lr: " << optimizer->current_learning_rate
+                         << ", learning rate: " << optimizer->current_learning_rate
                          << '\n';
                 }
             }
@@ -2102,12 +2119,12 @@ public:
             const double epoch_data_loss = loss->calculate_accumulated(epoch_reg_loss);
             const double epoch_loss = epoch_data_loss + epoch_reg_loss;
             const double epoch_accuracy = accuracy->calculate_accumulated();
-            cout << "training, acc: " << epoch_accuracy
+            cout << "training - accuracy: " << epoch_accuracy
                  << ", loss: " << epoch_loss
-                 << " (data_loss: " << epoch_data_loss
-                 << ", reg_loss: " << epoch_reg_loss
+                 << " (data loss: " << epoch_data_loss
+                 << ", regularization loss: " << epoch_reg_loss
                  << ")"
-                 << ", lr: " << optimizer->current_learning_rate
+                 << ", learning rate: " << optimizer->current_learning_rate
                  << '\n';
 
             if (X_val && y_val) evaluate(*X_val, *y_val, batch_size, false);
@@ -2154,14 +2171,14 @@ public:
 
             forward_pass(batch_X, false);
             loss->calculate(output, batch_y);
-            last_predictions = layers.back().predictions(output);
+            last_predictions = predictions_from_output(output);
             accuracy->calculate(last_predictions, batch_y);
         }
 
         const double val_loss = loss->calculate_accumulated();
         const double val_acc = accuracy->calculate_accumulated();
 
-        cout << "validation, accuracy: " << val_acc
+        cout << "validation - accuracy: " << val_acc
              << ", loss: " << val_loss
              << '\n';
     }
@@ -2171,15 +2188,30 @@ private:
 
     void forward_pass(const Matrix& X, const bool training)
     {
-        input_layer.forward(X, training);
+        input_layer.forward(X);
 
-            const Matrix* current = &input_layer.output;
-            for (auto& layer : layers) {
-                layer.forward(*current, training);
-                current = &layer.output();
-            }
+        const Matrix* current = &input_layer.output;
+        for (Layer* layer : layers) {
+            layer->forward(*current, training);
+            current = &layer->output;
+        }
 
         output = *current;
+    }
+
+    bool output_is_softmax() const
+    {
+        if (layers.empty()) return false;
+        const Activation* activation = layers.back()->activation;
+        return activation && (dynamic_cast<const ActivationSoftmax*>(activation) != nullptr);
+    }
+
+    Matrix predictions_from_output(const Matrix& outputs) const
+    {
+        if (layers.empty()) return outputs;
+        const Activation* activation = layers.back()->activation;
+        if (!activation) return outputs;
+        return activation->predictions(outputs);
     }
 };
 
@@ -2193,30 +2225,27 @@ int main()
 
     fashion_mnist_create(X, y, X_test, y_test);
 
-    LayerDense dense1(X.cols, 128, 0.0, 5e-4, 0.0, 5e-4);
     ActivationReLU activation1;
+    LayerDense dense1(X.cols, 128, activation1, 0.0, 5e-4, 0.0, 5e-4);
 
-    LayerDense dense2(128, 128, 0.0, 5e-4, 0.0, 5e-4);
     ActivationReLU activation2;
+    LayerDense dense2(128, 128, activation2, 0.0, 5e-4, 0.0, 5e-4);
 
-    LayerDense dense3(128, 10);
     ActivationSoftmax activation3;
+    LayerDense dense3(128, 10, activation3);
 
-    LossCategoricalCrossEntropy loss_function;
-    OptimizerAdam optimizer(1e-3);
+    LossCategoricalCrossEntropy loss;
     AccuracyCategorical accuracy;
+    OptimizerAdam optimizer(1e-3);
 
     Model model;
     model.add(dense1);
-    model.add(activation1);
     model.add(dense2);
-    model.add(activation2);
     model.add(dense3);
-    model.add(activation3);
-    model.set(loss_function, optimizer, accuracy);
+    model.set(loss, accuracy, optimizer);
     model.finalize();
 
-    model.train(X, y, 1, 128, 100, &X_test, &y_test);
+    model.train(X, y, 2, 128, 100, &X_test, &y_test);
 
     cout << "extra validation after shuffling to check if the model assumes sorted labels:\n";
     X_test.shuffle_rows_with(y_test);
