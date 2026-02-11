@@ -9,6 +9,7 @@
 #include <cctype>
 #include <fstream>
 #include <algorithm>
+#include <atomic>
 
 #include "fashion_mnist/mnist_reader.hpp"
 
@@ -18,11 +19,17 @@ using std::ofstream;
 using std::runtime_error;
 using std::size_t;
 using std::string;
+using std::atomic;
 using std::numeric_limits;
 using std::mt19937;
 using std::normal_distribution;
 using std::uniform_real_distribution;
 using std::uniform_int_distribution;
+using std::seed_seq;
+using std::random_device;
+using std::memory_order_relaxed;
+using std::memory_order_release;
+using std::memory_order_acquire;
 using std::fixed;
 using std::setprecision;
 using std::swap;
@@ -40,6 +47,12 @@ using std::isfinite;
 using std::transform;
 using std::tolower;
 
+// TODO: finish and fix tests
+// TODO: install matplot++ and make it plot scatter svg data (install cmake as well)
+// TODO: add save_params, load_params, save, load methods to the model class
+//       maybe find a cpp library for reading/writing objects to files
+// TODO: seperate project into multiple files
+
 inline bool is_whole_number(double v, double epsilon = 1e-7)
 {
     return abs(v - round(v)) <= epsilon;
@@ -51,31 +64,101 @@ inline void multiplication_overflow_check(const size_t a, const size_t b, const 
     }
 }
 
-// TODO: install matplot++ and make it plot scatter svg data (install cmake as well)
-// TODO: Make rng implementation thread-safe
-// TODO: add save_params, load_params, save, load methods to the model class
-//       maybe find a cpp library for reading/writing objects to files
-// TODO: finish and fix tests
-// TODO: seperate project into multiple files
+// thread-safe rng (thread-local mt19937)
+// deterministic per-thread streams with global seed + per-thread stream id
+static atomic<uint32_t> g_seed_value{0};
+static atomic<bool> g_use_deterministic_seed{false};
+static atomic<uint32_t> g_seed_epoch{0};
 
+static thread_local uint32_t t_stream_id = 0;
+static thread_local bool t_stream_id_set = false;
 
-// global RNG
-mt19937 g_rng(0);
+// call once per thread before any random draws in that thread
+void set_thread_stream_id(uint32_t stream_id)
+{
+    t_stream_id = stream_id;
+    t_stream_id_set = true;
+}
+
+// function for making rng deterministic
+// call once before any random draws (at the start of the program) to make outcomes deterministic
+void set_global_seed(uint32_t seed)
+{
+    g_seed_value.store(seed, memory_order_relaxed);
+    g_use_deterministic_seed.store(true, memory_order_relaxed);
+    g_seed_epoch.fetch_add(1, memory_order_release);
+}
+
+// function to turn deterministic rng off
+void set_nondeterministic_seed()
+{
+    g_use_deterministic_seed.store(false, memory_order_relaxed);
+    g_seed_epoch.fetch_add(1, memory_order_release);
+}
+
+static mt19937& thread_rng()
+{
+    thread_local mt19937 rng;
+    thread_local uint32_t local_epoch = numeric_limits<uint32_t>::max();
+
+    const uint32_t current_epoch = g_seed_epoch.load(memory_order_acquire);
+    if (local_epoch != current_epoch) {
+        local_epoch = current_epoch;
+
+        if (g_use_deterministic_seed.load(memory_order_relaxed)) {
+            if (!t_stream_id_set) {
+                throw runtime_error(
+                    "thread_rng: deterministic mode requires set_thread_stream_id() to be called once per thread before any random draws");
+            }
+
+            const uint32_t seed = g_seed_value.load(memory_order_relaxed);
+            seed_seq seq{seed, current_epoch, t_stream_id, 0x9e3779b9u, 0x85ebca6bu};
+            rng.seed(seq);
+        } else {
+            const uint32_t stream_id = t_stream_id_set ? t_stream_id : 0u;
+
+            random_device rd;
+            seed_seq seq{rd(), rd(), stream_id, 0x9e3779b9u, 0x85ebca6bu};
+            rng.seed(seq);
+        }
+    }
+
+    return rng;
+}
 
 // each generated number is centered around 0 with a standard deviation of 1
 // unbounded - technically can be any value but it is more likely to be around 0
 double random_gaussian()
 {
-    static normal_distribution<double> dist(0.0, 1.0);
-    return dist(g_rng);
+    thread_local normal_distribution<double> dist(0.0, 1.0);
+
+    thread_local uint32_t dist_epoch = numeric_limits<uint32_t>::max();
+    const uint32_t current_epoch = g_seed_epoch.load(memory_order_acquire);
+    if (dist_epoch != current_epoch) {
+        dist_epoch = current_epoch;
+        dist.reset();
+    }
+
+    return dist(thread_rng());
 }
 
 // generated numbers are in range [0, 1)
 // they are equally likely to be any value in that range
 double random_uniform()
 {
-    static uniform_real_distribution<double> uniform(0.0, 1.0);
-    return uniform(g_rng);
+    thread_local uniform_real_distribution<double> uniform(0.0, 1.0);
+    return uniform(thread_rng());
+}
+
+// generated numbers are in range [min_value, max_value]
+// they are equally likely to be any value in that range
+size_t random_uniform_int(size_t min_value, size_t max_value)
+{
+    if (min_value > max_value) {
+        throw runtime_error("random_uniform_int: min_value cannot exceed max_value");
+    }
+    uniform_int_distribution<size_t> dist(min_value, max_value);
+    return dist(thread_rng());
 }
 
 class Matrix
@@ -312,8 +395,7 @@ public:
         if (rows < 2) return;
 
         for (size_t i = rows - 1; i > 0; --i) {
-            uniform_int_distribution<size_t> dist(0, i);
-            const size_t j = dist(g_rng);
+            const size_t j = random_uniform_int(0, i);
             if (i == j) continue;
 
             for (size_t c = 0; c < cols; ++c) {
@@ -2409,6 +2491,10 @@ void print_sample_predictions(
 #ifndef NNFS_NO_MAIN
 int main()
 {
+    // setting up rng
+    set_global_seed(0);
+    set_thread_stream_id(0);
+
     // loading dataset
     Matrix X;
     Matrix y;
@@ -2435,13 +2521,13 @@ int main()
     model.set(loss, accuracy, optimizer);
     model.finalize();
 
+    // using model
     model.train(X, y, 1, 128, 100, &X_test, &y_test);
 
     vector<Matrix> params = model.get_params();
     model.set_params(params);
 
     Matrix preds = model.predict(X_test, 128);
-
     print_sample_predictions(preds, y_test, 100);
 
     cout << "extra validation after shuffling to check if the model assumes sorted labels:\n";
