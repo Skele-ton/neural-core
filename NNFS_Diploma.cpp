@@ -80,7 +80,7 @@ void set_thread_stream_id(uint32_t stream_id)
     t_stream_id_set = true;
 }
 
-// function for making rng deterministic
+// make rng deterministic
 // call once before any random draws (at the start of the program) to make outcomes deterministic
 void set_global_seed(uint32_t seed)
 {
@@ -89,7 +89,7 @@ void set_global_seed(uint32_t seed)
     g_seed_epoch.fetch_add(1, memory_order_release);
 }
 
-// function to turn deterministic rng off
+// make rng non-deterministic
 void set_nondeterministic_seed()
 {
     g_use_deterministic_seed.store(false, memory_order_relaxed);
@@ -161,15 +161,14 @@ size_t random_uniform_int(size_t min_value, size_t max_value)
     return dist(thread_rng());
 }
 
+// Matrix class based on the standard C++ vector
 class Matrix
 {
 public:
-    vector<double> data;
-
-    Matrix() : data(), rows(0), cols(0) {}
+    Matrix() : rows(0), cols(0), data() {}
 
     Matrix(size_t r, size_t c, double value = 0.0)
-        : data(), rows(0), cols(0)
+        : rows(0), cols(0), data()
     {
         assign(r, c, value);
     }
@@ -412,10 +411,12 @@ public:
 
     size_t get_rows() const { return rows; }
     size_t get_cols() const { return cols; }
+    const vector<double>& get_data() const { return data; }
 
 private:
     size_t rows;
     size_t cols;
+    vector<double> data;
 };
 
 // training data
@@ -726,7 +727,6 @@ public:
     Matrix predictions(const Matrix& outputs) const override { return outputs; }
 };
 
-// Softmax activation
 class ActivationSoftmax : public Activation
 {
 public:
@@ -794,7 +794,6 @@ public:
     }
 };
 
-// Sigmoid activation
 class ActivationSigmoid : public Activation
 {
 public:
@@ -848,7 +847,6 @@ public:
     }
 };
 
-// Linear activation (identity)
 class ActivationLinear : public Activation
 {
 public:
@@ -879,24 +877,30 @@ public:
     virtual ~Layer() = default;
 
     virtual void forward(const Matrix& inputs_batch, bool training) = 0;
-    virtual void backward(const Matrix& dvalues, bool include_activation = true) = 0;
+    virtual void backward(const Matrix& dvalues, bool include_activation) = 0;
 
-    const Activation* get_activation() const { return activation; }
     const Matrix& get_inputs() const { return inputs; }
     const Matrix& get_output() const { return output; }
     const Matrix& get_dinputs() const { return dinputs; }
+    const Activation* get_activation() const { return activation; }
 
 protected:
     Matrix inputs;
     Matrix output;
     Matrix dinputs;
     Activation* activation = nullptr;
+
+    void forward(const Matrix& inputs_batch) { forward(inputs_batch, true); }
+    void backward(const Matrix& dvalues) { backward(dvalues, true); }
 };
 
 // dense layer with weights, biases and an activation function
 class LayerDense : public Layer
 {
 public:
+    using Layer::forward;
+    using Layer::backward;
+
     Matrix weights;
     Matrix biases;
 
@@ -1067,21 +1071,24 @@ private:
     ActivationLinear activation_linear;
 };
 
-// dropout layer
+// dropout layer for "disabling" part of the neurons during training
 class LayerDropout : public Layer
 {
 public:
+    using Layer::forward;
+    using Layer::backward;
+
     explicit LayerDropout(double dropout_rate)
         : keep_rate(1.0 - dropout_rate)
     {
         if (keep_rate <= 0.0 || keep_rate > 1.0) {
-            throw runtime_error("LayerDropout: dropout_rate must be in (0,1]");
+            throw runtime_error("LayerDropout: dropout_rate must be in [0,1)");
         }
 
         activation = &activation_linear;
     }
 
-    void forward(const Matrix& inputs_batch, bool training = true) override
+    void forward(const Matrix& inputs_batch, bool training) override
     {
         inputs_batch.require_non_empty("LayerDropout::forward: inputs must be non-empty");
 
@@ -1119,13 +1126,16 @@ public:
         }
     }
 
+    double get_keep_rate() const { return keep_rate; }
+
 private:
     double keep_rate;
     Matrix scaled_binary_mask;
     ActivationLinear activation_linear;
 };
 
-// input "layer" for storing inputs into the model. Doesn't inherit from the base layer class
+// input "layer" for storing inputs into the model
+// doesn't inherit from the base layer class
 class LayerInput
 {
 public:
@@ -1158,8 +1168,8 @@ public:
             "Loss::calculate: per-sample losses must be of shape (1,output.get_rows()) after forward");
 
         double sum = 0.0;
-        for (double v : sample_losses.data) sum += v;
-        const double count = sample_losses.data.size();
+        for (double v : sample_losses.get_data()) sum += v;
+        const double count = sample_losses.get_data().size();
 
         accumulated_sum += sum;
         accumulated_count += count;
@@ -1219,11 +1229,6 @@ private:
 
     static double regularization_loss(const LayerDense& layer)
     {
-        if (layer.get_weight_regularizer_l1() < 0.0 || layer.get_weight_regularizer_l2() < 0.0 ||
-            layer.get_bias_regularizer_l1() < 0.0 || layer.get_bias_regularizer_l2() < 0.0) {
-            throw runtime_error("Loss::regularization_loss: regularizer coefficients must be non-negative");
-        }
-
         double regularization = 0.0;
 
         const bool has_w_l1 = layer.get_weight_regularizer_l1() != 0.0;
@@ -1235,7 +1240,7 @@ private:
             double sum_abs = 0.0;
             double sum_sq  = 0.0;
 
-            for (double weight : layer.weights.data) {
+            for (double weight : layer.weights.get_data()) {
                 if (has_w_l1) sum_abs += abs(weight);
                 if (has_w_l2)  sum_sq  += weight * weight;
             }
@@ -1256,7 +1261,7 @@ private:
             double sum_abs = 0.0;
             double sum_sq  = 0.0;
 
-            for (double bias : layer.biases.data) {
+            for (double bias : layer.biases.get_data()) {
                 if (has_b_l1) sum_abs += abs(bias);
                 if (has_b_l2) sum_sq  += bias * bias;
             }
@@ -1522,7 +1527,7 @@ protected:
     }
 };
 
-// Softmax classifier - combined Softmax activation and cross-entropy loss (backward only)
+// Softmax classifier (backward only) - combined Softmax activation and cross-entropy loss
 class ActivationSoftmaxLossCategoricalCrossEntropy
 {
 public:
@@ -1606,7 +1611,10 @@ public:
 
     virtual void update_params(LayerDense& layer) = 0;
 
+    double get_learning_rate() const { return learning_rate; }
     double get_current_learning_rate() const { return current_learning_rate; }
+    double get_decay() const { return decay; }
+    double get_iterations() const { return iterations; }
 
 protected:
     double learning_rate;
@@ -1615,7 +1623,6 @@ protected:
     size_t iterations;
 };
 
-// SGD optimizer
 class OptimizerSGD : public Optimizer
 {
 public:
@@ -1637,8 +1644,6 @@ public:
 
         layer.get_dweights().require_shape(layer.weights.get_rows(), layer.weights.get_cols(),
             "OptimizerSGD::update_params: dweights must match weights shape");
-        layer.get_dbiases().require_shape(1, layer.biases.get_cols(),
-            "OptimizerSGD::update_params: dbiases must match biases shape");
 
         const size_t w_rows = layer.weights.get_rows();
         const size_t w_cols = layer.weights.get_cols();
@@ -1683,7 +1688,6 @@ private:
     double momentum;
 };
 
-// Adagrad optimizer
 class OptimizerAdagrad : public Optimizer
 {
 public:
@@ -1706,8 +1710,6 @@ public:
 
         layer.get_dweights().require_shape(layer.weights.get_rows(), layer.weights.get_cols(),
             "OptimizerAdagrad::update_params: dweights must match weights shape");
-        layer.get_dbiases().require_shape(1, layer.biases.get_cols(),
-            "OptimizerAdagrad::update_params: dbiases must match biases shape");
 
         const size_t w_rows = layer.weights.get_rows();
         const size_t w_cols = layer.weights.get_cols();
@@ -1741,7 +1743,6 @@ private:
     double epsilon;
 };
 
-// RMSprop optimizer
 class OptimizerRMSprop : public Optimizer
 {
 public:
@@ -1768,8 +1769,6 @@ public:
 
         layer.get_dweights().require_shape(layer.weights.get_rows(), layer.weights.get_cols(),
             "OptimizerRMSprop::update_params: dweights must match weights shape");
-        layer.get_dbiases().require_shape(1, layer.biases.get_cols(),
-            "OptimizerRMSprop::update_params: dbiases must match biases shape");
 
         const size_t w_rows = layer.weights.get_rows();
         const size_t w_cols = layer.weights.get_cols();
@@ -1805,7 +1804,6 @@ private:
     double rho;
 };
 
-// Adam optimizer
 class OptimizerAdam : public Optimizer
 {
 public:
@@ -1847,8 +1845,6 @@ public:
 
         layer.get_dweights().require_shape(layer.weights.get_rows(), layer.weights.get_cols(),
             "OptimizerAdam::update_params: dweights must match weights shape");
-        layer.get_dbiases().require_shape(1, layer.biases.get_cols(),
-            "OptimizerAdam::update_params: dbiases must match biases shape");
 
         const size_t w_rows = layer.weights.get_rows();
         const size_t w_cols = layer.weights.get_cols();
@@ -1967,6 +1963,8 @@ public:
     {
     }
 
+    bool get_binray() const { return binary; }
+
 protected:
     size_t compare(const Matrix& y_pred, const Matrix& y_true) override
     {
@@ -2069,6 +2067,8 @@ public:
 
     void reset() override { initialized = false; }
 
+    double get_precision_divisor() const { return precision_divisor; }
+
 protected:
     size_t compare(const Matrix& y_pred, const Matrix& y_true) override
     {
@@ -2151,7 +2151,7 @@ public:
         y.require_non_empty("Model::train: y must be non-empty");
 
         if (batch_size > X.get_rows()) {
-            throw runtime_error("Model::train: batch_size cannot exceed number of samples");
+            throw runtime_error("Model::train: batch_size cannot exceed number of samples aka X.get_rows()");
         }
 
         size_t samples = X.get_rows();
@@ -2203,13 +2203,9 @@ public:
                     dvalues = &combined_softmax_ce.get_dinputs();
 
                     Layer* last_layer = *iter;
-                    auto* last_dense = dynamic_cast<LayerDense*>(last_layer);
-                    if (!last_dense) {
-                        throw runtime_error("Model::train: combined softmax loss requires final layer to be LayerDense");
-                    }
 
-                    last_dense->backward(*dvalues, false);
-                    dvalues = &last_dense->get_dinputs();
+                    last_layer->backward(*dvalues, false);
+                    dvalues = &last_layer->get_dinputs();
                     ++iter;
                 } else {
                     loss->backward(output, batch_y);
@@ -2217,7 +2213,7 @@ public:
                 }
 
                 for (; iter != layers.rend(); ++iter) {
-                    (*iter)->backward(*dvalues);
+                    (*iter)->backward(*dvalues, true);
                     dvalues = &(*iter)->get_dinputs();
                 }
 
@@ -2269,7 +2265,7 @@ public:
         y.require_non_empty("Model::evaluate: y must be non-empty");
 
         if (batch_size > X.get_rows()) {
-            throw runtime_error("Model::evaluate: batch_size cannot exceed number of samples");
+            throw runtime_error("Model::evaluate: batch_size cannot exceed number of samples aka X.get_rows()");
         }
 
         size_t samples = X.get_rows();
@@ -2317,7 +2313,7 @@ public:
         X.require_non_empty("Model::predict: X must be non-empty");
 
         if (batch_size > X.get_rows()) {
-            throw runtime_error("Model::predict: batch_size cannot exceed number of samples");
+            throw runtime_error("Model::predict: batch_size cannot exceed number of samples aka X.get_rows()");
         }
 
         const size_t samples = X.get_rows();
@@ -2460,7 +2456,7 @@ private:
     }
 };
 
-namespace {
+#ifndef NNFS_NO_MAIN
 void print_sample_predictions(
     const Matrix& predictions, const Matrix& y_test, size_t num_of_samples)
 {
@@ -2486,9 +2482,7 @@ void print_sample_predictions(
              << '\n';
     }
 }
-}
 
-#ifndef NNFS_NO_MAIN
 int main()
 {
     // setting up rng
