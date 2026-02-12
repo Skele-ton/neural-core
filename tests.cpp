@@ -1,5 +1,4 @@
 #include <sstream>
-#include <iterator>
 #include <cstdio>
 #include <thread>
 
@@ -10,11 +9,10 @@
 #include "NNFS_Diploma.cpp"
 
 using std::thread;
+using std::streambuf;
+using std::ios;
 using std::ifstream;
 using std::ostringstream;
-using std::streambuf;
-using std::istreambuf_iterator;
-using std::getline;
 using std::remove;
 
 // === helpers ===
@@ -469,6 +467,19 @@ TEST_CASE("Matrix shuffle_rows_with validates inputs and shuffles with row/col l
 }
 
 // === fashion_mnist_create ===
+TEST_CASE("fashion_mnist_create throws when dataset files are missing")
+{
+    Matrix X_train;
+    Matrix y_train;
+    Matrix X_test;
+    Matrix y_test;
+
+    CHECK_THROWS_WITH_AS(
+        fashion_mnist_create(X_train, y_train, X_test, y_test, "definitely_missing_fashion_mnist_dir"),
+        "fashion_mnist_create: dataset files not found under: definitely_missing_fashion_mnist_dir",
+        runtime_error);
+}
+
 TEST_CASE("fashion_mnist_create loads and normalizes data")
 {
     Matrix X_train;
@@ -605,45 +616,54 @@ TEST_CASE("generate_sine_data validates arguments and produces sine pairs")
     }
 }
 
-// === plot_scatter_svg ===
-TEST_CASE("plot_scatter_svg validates inputs and labels")
+// === scatter_plot ===
+TEST_CASE("scatter_plot validates inputs and labels")
 {
+#ifdef ENABLE_MATPLOT
     Matrix empty;
-    CHECK_THROWS_WITH_AS(plot_scatter_svg("unused.svg", empty),
-                         "plot_scatter_svg: points must be non-empty",
+    CHECK_THROWS_WITH_AS(scatter_plot("unused.png", empty),
+                         "scatter_plot: points must be non-empty",
                          runtime_error);
 
     Matrix wrong_cols(1, 1, 0.0);
-    CHECK_THROWS_WITH_AS(plot_scatter_svg("unused.svg", wrong_cols),
-                         "plot_scatter_svg: invalid input data",
+    CHECK_THROWS_WITH_AS(scatter_plot("unused.png", wrong_cols),
+                         "scatter_plot: points must have at least 2 columns",
                          runtime_error);
 
     Matrix points(2, 2, 0.5);
     Matrix labels(2, 2, 0.0);
-    CHECK_THROWS_WITH_AS(plot_scatter_svg("unused.svg", points, labels),
-                         "plot_scatter_svg: labels must be shape (N,1) or (1,N) where N = points.get_rows()",
+    CHECK_THROWS_WITH_AS(scatter_plot("unused.png", points, labels),
+                         "scatter_plot: labels must be a 1D vector with shape (N,1) or (1,N), where N = points.get_rows()",
                          runtime_error);
+#else
+    Matrix points(1, 2, 0.0);
+    CHECK_THROWS_WITH_AS(scatter_plot("unused.png", points),
+                         "scatter_plot: built without Matplot++ (ENABLE_MATPLOT=OFF)",
+                         runtime_error);
+#endif
 }
 
-TEST_CASE("plot_scatter_svg rejects zero distance between values and invalid path")
+TEST_CASE("scatter_plot validates path")
 {
+#ifdef ENABLE_MATPLOT
     Matrix points(2, 2);
-    points(0, 0) = 1.0; points(0, 1) = 0.0;
+    points(0, 0) = 0.0; points(0, 1) = 0.0;
     points(1, 0) = 1.0; points(1, 1) = 1.0;
-    CHECK_THROWS_WITH_AS(plot_scatter_svg("unused.svg", points),
-                         "plot_scatter_svg: x and y must have non-zero distance between values",
-                         runtime_error);
 
-    Matrix ok(2, 2);
-    ok(0, 0) = 0.0; ok(0, 1) = 0.0;
-    ok(1, 0) = 1.0; ok(1, 1) = 1.0;
-    CHECK_THROWS_WITH_AS(plot_scatter_svg("/nonexistent_dir/plot.svg", ok),
-                         "plot_scatter_svg: given path is invalid",
+    CHECK_THROWS_WITH_AS(scatter_plot("", points),
+                         "scatter_plot: given path is invalid",
                          runtime_error);
+#else
+    Matrix points(1, 2, 0.0);
+    CHECK_THROWS_WITH_AS(scatter_plot("", points),
+                         "scatter_plot: built without Matplot++ (ENABLE_MATPLOT=OFF)",
+                         runtime_error);
+#endif
 }
 
-TEST_CASE("plot_scatter_svg writes expected SVG with and without labels")
+TEST_CASE("scatter_plot writes output with and without labels")
 {
+#ifdef ENABLE_MATPLOT
     Matrix points(3, 2);
     points(0, 0) = 0.0; points(0, 1) = 0.0;
     points(1, 0) = 1.0; points(1, 1) = 0.5;
@@ -654,40 +674,25 @@ TEST_CASE("plot_scatter_svg writes expected SVG with and without labels")
     labels(1, 0) = 1.0;
     labels(2, 0) = 2.0;
 
-    const string path = "test_plot.svg";
-    plot_scatter_svg(path, points, labels);
-
-    ifstream file(path);
+    const string path = "test_plot.png";
+    scatter_plot(path, points, labels);
+    ifstream file(path, ios::binary);
     REQUIRE(file.good());
-
-    string line;
-    bool saw_svg = false;
-    int circles = 0;
-    while (getline(file, line)) {
-        if (!saw_svg && line.find("<svg") != string::npos) {
-            saw_svg = true;
-        }
-        if (line.find("<circle") != string::npos) {
-            ++circles;
-        }
-    }
-
-    CHECK(saw_svg == true);
-    CHECK(circles == 3);
+    CHECK(file.peek() != ifstream::traits_type::eof());
     remove(path.c_str());
 
-    const string path2 = "test_plot_unlabeled.svg";
-    plot_scatter_svg(path2, points);
-    ifstream file2(path2);
+    const string path2 = "test_plot_unlabeled.png";
+    scatter_plot(path2, points);
+    ifstream file2(path2, ios::binary);
     REQUIRE(file2.good());
-    string contents((istreambuf_iterator<char>(file2)),
-                         istreambuf_iterator<char>());
-    CHECK(contents.find("<circle") != string::npos);
+    CHECK(file2.peek() != ifstream::traits_type::eof());
     remove(path2.c_str());
+#endif
 }
 
-TEST_CASE("plot_scatter_svg accepts row-vector labels")
+TEST_CASE("scatter_plot accepts row-vector labels")
 {
+#ifdef ENABLE_MATPLOT
     Matrix points(2, 2);
     points(0, 0) = 0.0; points(0, 1) = 0.0;
     points(1, 0) = 1.0; points(1, 1) = 1.0;
@@ -696,9 +701,12 @@ TEST_CASE("plot_scatter_svg accepts row-vector labels")
     labels(0, 0) = 0.0;
     labels(0, 1) = 1.0;
 
-    const string path = "test_plot_row_labels.svg";
-    plot_scatter_svg(path, points, labels);
+    const string path = "test_plot_row_labels.png";
+    scatter_plot(path, points, labels);
+    ifstream file(path, ios::binary);
+    REQUIRE(file.good());
     remove(path.c_str());
+#endif
 }
 
 // === ActivationReLU ===

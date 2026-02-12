@@ -2,7 +2,7 @@
 
 NNFS.pdf
 
-plot.svg
+plot.*
 
 NNFS_Diploma
 NNFS_Diploma.exe
@@ -24,6 +24,8 @@ mnist_reader.hpp
 mnist_reader_less.hpp
 mnist_reader_common.hpp
 
+Testing/
+
 *.o
 *.obj
 
@@ -32,6 +34,7 @@ mnist_reader_common.hpp
 *.dylib
 
 build/
+build-*/
 cmake-build-*/
 
 .DS_Store

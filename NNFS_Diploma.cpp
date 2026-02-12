@@ -1,5 +1,4 @@
 #include <iostream>
-#include <iomanip>
 #include <vector>
 #include <stdexcept>
 #include <random>
@@ -7,15 +6,18 @@
 #include <limits>
 #include <string>
 #include <cctype>
-#include <fstream>
+#include <filesystem>
 #include <algorithm>
 #include <atomic>
 
 #include "fashion_mnist/mnist_reader.hpp"
 
+#ifdef ENABLE_MATPLOT
+#include <matplot/matplot.h>
+#endif
+
 using std::cout;
 using std::vector;
-using std::ofstream;
 using std::runtime_error;
 using std::size_t;
 using std::string;
@@ -30,8 +32,6 @@ using std::random_device;
 using std::memory_order_relaxed;
 using std::memory_order_release;
 using std::memory_order_acquire;
-using std::fixed;
-using std::setprecision;
 using std::swap;
 using std::min;
 using std::max;
@@ -47,8 +47,6 @@ using std::isfinite;
 using std::transform;
 using std::tolower;
 
-// TODO: finish and fix tests
-// TODO: install matplot++ and make it plot scatter svg data (install cmake as well)
 // TODO: add save_params, load_params, save, load methods to the model class
 //       maybe find a cpp library for reading/writing objects to files
 // TODO: seperate project into multiple files
@@ -425,6 +423,18 @@ void fashion_mnist_create(
     Matrix& X_test_out,  Matrix& y_test_out,
     const string& dir = "fashion_mnist")
 {
+    namespace fs = std::filesystem;
+
+    const string train_images = dir + "/train-images-idx3-ubyte";
+    const string train_labels = dir + "/train-labels-idx1-ubyte";
+    const string test_images = dir + "/t10k-images-idx3-ubyte";
+    const string test_labels = dir + "/t10k-labels-idx1-ubyte";
+
+    if (!fs::exists(train_images) || !fs::exists(train_labels) ||
+        !fs::exists(test_images)  || !fs::exists(test_labels)) {
+        throw runtime_error("fashion_mnist_create: dataset files not found under: " + dir);
+    }
+
     auto dataset = mnist::read_dataset<vector, vector, uint8_t, uint8_t>(dir);
 
     const size_t train_samples = dataset.training_images.size();
@@ -540,136 +550,97 @@ void generate_sine_data(size_t samples, Matrix& X_out, Matrix& y_out)
     }
 }
 
-// plots generated data
-void plot_scatter_svg(const string& path, const Matrix& points, const Matrix& labels = Matrix())
+// plot generated data
+void scatter_plot(const string& path, const Matrix& points, const Matrix& labels = Matrix())
 {
-    points.require_non_empty("plot_scatter_svg: points must be non-empty");
+#ifndef ENABLE_MATPLOT
+    (void)path;
+    (void)points;
+    (void)labels;
+    throw runtime_error("scatter_plot: built without Matplot++ (ENABLE_MATPLOT=OFF)");
+#else
+    if (path.empty()) {
+        throw runtime_error("scatter_plot: given path is invalid");
+    }
+
+    points.require_non_empty("scatter_plot: points must be non-empty");
     if (points.get_cols() < 2) {
-        throw runtime_error("plot_scatter_svg: invalid input data");
+        throw runtime_error("scatter_plot: points must have at least 2 columns");
     }
 
     const size_t num_points = points.get_rows();
 
     const bool has_labels = !labels.is_empty();
+    Matrix labels_sparse;
     if (has_labels) {
-        const bool column_vector_like = (labels.get_rows() == num_points && labels.get_cols() == 1);
-        const bool row_vector_like = (labels.get_rows() == 1 && labels.get_cols() == num_points);
-        if (!column_vector_like && !row_vector_like) {
-            throw runtime_error("plot_scatter_svg: labels must be shape (N,1) or (1,N) where N = points.get_rows()");
+        if (labels.is_col_vector() && labels.get_rows() == num_points) {
+            labels_sparse = labels;
+        } else if (labels.is_row_vector() && labels.get_cols() == num_points) {
+            labels_sparse = labels.transpose();
+        } else {
+            throw runtime_error("scatter_plot: labels must be a 1D vector with shape (N,1) or (1,N), where N = points.get_rows()");
+        }
+
+        labels_sparse.require_shape(num_points, 1,
+            "scatter_plot: normalized labels must have shape (N,1)");
     }
-}
 
-    double xmin = points(0, 0), xmax = points(0, 0);
-    double ymin = points(0, 1), ymax = points(0, 1);
-
+    double xmin = points(0, 0);
+    double xmax = points(0, 0);
+    double ymin = points(0, 1);
+    double ymax = points(0, 1);
     for (size_t point_index = 1; point_index < num_points; ++point_index) {
-        const double point_x = points(point_index, 0);
-        const double point_y = points(point_index, 1);
-        xmin = min(xmin, point_x);
-        ymin = min(ymin, point_y);
-        xmax = max(xmax, point_x);
-        ymax = max(ymax, point_y);
+        const double x = points(point_index, 0);
+        const double y = points(point_index, 1);
+        xmin = min(xmin, x);
+        xmax = max(xmax, x);
+        ymin = min(ymin, y);
+        ymax = max(ymax, y);
     }
 
-    const double dist_x = abs(xmax - xmin);
-    const double dist_y = abs(ymax - ymin);
+    const double x_span = xmax - xmin;
+    const double y_span = ymax - ymin;
+    const double pad_ratio = 0.05;
+    const double min_pad = 1e-6;
+    const double x_pad = max(x_span * pad_ratio, min_pad);
+    const double y_pad = max(y_span * pad_ratio, min_pad);
 
-    const double eps = 1e-12;
-    if (dist_x < eps || dist_y < eps) {
-        throw runtime_error("plot_scatter_svg: x and y must have non-zero distance between values");
-    }
-
-    const double pad_x = 0.08 * dist_x;
-    const double pad_y = 0.08 * dist_y;
-
-    xmin -= pad_x;
-    ymin -= pad_y;
-    xmax += pad_x;
-    ymax += pad_y;
-
-    const size_t svg_width = 900, svg_height = 700;
-    const size_t margin_left = 70, margin_right = 30, margin_top = 30, margin_bottom = 70;
-    const size_t plot_width = svg_width - margin_left - margin_right;
-    const size_t plot_height = svg_height - margin_top - margin_bottom;
-
-    auto map_x = [&](double raw_x) -> double {
-        const double normalized_x = (raw_x - xmin) / (xmax - xmin);
-        const double clamped_x = normalized_x < 0.0 ? 0.0 : (normalized_x > 1.0 ? 1.0 : normalized_x);
-        return margin_left + clamped_x * plot_width;
-    };
-    auto map_y = [&](double raw_y) -> double {
-        const double normalized_y = (raw_y - ymin) / (ymax - ymin);
-        const double clamped_y = normalized_y < 0.0 ? 0.0 : (normalized_y > 1.0 ? 1.0 : normalized_y);
-        return margin_top + (1.0 - clamped_y) * plot_height;
-    };
-
-    ofstream out(path);
-    if (!out) throw runtime_error("plot_scatter_svg: given path is invalid");
-
-    out << "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"" << svg_width
-        << "\" height=\"" << svg_height << "\" viewBox=\"0 0 " << svg_width << " " << svg_height << "\">\n";
-
-    out << "<rect x=\"0\" y=\"0\" width=\"" << svg_width << "\" height=\"" << svg_height
-        << "\" fill=\"white\"/>\n";
-
-    out << "<rect x=\"" << margin_left << "\" y=\"" << margin_top << "\" width=\"" << plot_width << "\" height=\"" << plot_height
-        << "\" fill=\"none\" stroke=\"#222\" stroke-width=\"1\"/>\n";
-
-    const size_t ticks = 10;
-
-    out << "<g stroke=\"#ddd\" stroke-width=\"1\">\n";
-    for (size_t i = 1; i < ticks; ++i) {
-        const double grid_x = margin_left + (plot_width * static_cast<double>(i) / ticks);
-        const double grid_y = margin_top + (plot_height * static_cast<double>(i) / ticks);
-        out << "<line x1=\"" << grid_x << "\" y1=\"" << margin_top << "\" x2=\"" << grid_x << "\" y2=\"" << (margin_top + plot_height) << "\"/>\n";
-        out << "<line x1=\"" << margin_left << "\" y1=\"" << grid_y << "\" x2=\"" << (margin_left + plot_width) << "\" y2=\"" << grid_y << "\"/>\n";
-    }
-    out << "</g>\n";
-
-    out << "<g fill=\"#222\" font-family=\"Arial\" font-size=\"12\">\n";
-    out << fixed << setprecision(3);
-    for (size_t i = 0; i <= ticks; ++i) {
-        const double tick_value_x = xmin + (xmax - xmin) * static_cast<double>(i) / ticks;
-        const double tick_value_y = ymin + (ymax - ymin) * static_cast<double>(i) / ticks;
-
-        const double tick_pos_x = margin_left + (plot_width * static_cast<double>(i) / ticks);
-        const double tick_pos_y = margin_top + plot_height - (plot_height * static_cast<double>(i) / ticks);
- 
-        out << "<text x=\"" << tick_pos_x << "\" y=\"" << (margin_top + plot_height + 22)
-            << "\" text-anchor=\"middle\">" << tick_value_x << "</text>\n";
-        out << "<text x=\"" << (margin_left - 10) << "\" y=\"" << (tick_pos_y + 4)
-            << "\" text-anchor=\"end\">" << tick_value_y << "</text>\n";
-    }
-    out << "</g>\n";
-
-    out << "<g>\n";
-    const double r = 2.4;
-
-    static const char* colors[] = {
-        "#1f77b4", "#ff7f0e", "#2ca02c", "#d62728", "#9467bd",
-        "#8c564b", "#e377c2", "#7f7f7f", "#bcbd22", "#17becf"
-    };
-    const size_t num_of_colors = static_cast<size_t>(sizeof(colors) / sizeof(colors[0]));
-
+    vector<vector<double>> xs(1);
+    vector<vector<double>> ys(1);
     for (size_t point_index = 0; point_index < num_points; ++point_index) {
-        const double point_x = points(point_index, 0);
-        const double point_y = points(point_index, 1);
-
         size_t class_id = 0;
         if (has_labels) {
-            if (labels.get_rows() == num_points) class_id = labels.as_size_t(point_index, 0);
-            else class_id = labels.as_size_t(0, point_index);
+            class_id = labels_sparse.as_size_t(point_index, 0);
         }
-        const size_t color_id = class_id  % num_of_colors;
-        const char* class_color = colors[color_id];
 
-        out << "<circle cx=\"" << map_x(point_x) << "\" cy=\"" << map_y(point_y)
-            << "\" r=\"" << r << "\" fill=\"" << class_color
-            << "\" fill-opacity=\"0.85\"/>\n";
+        if (class_id >= xs.size()) {
+            xs.resize(class_id + 1);
+            ys.resize(class_id + 1);
+        }
+
+        xs[class_id].push_back(points(point_index, 0));
+        ys[class_id].push_back(points(point_index, 1));
     }
-    out << "</g>\n";
 
-    out << "</svg>\n";
+    matplot::figure(true);
+    matplot::hold(matplot::on);
+
+    for (size_t class_idx = 0; class_idx < xs.size(); ++class_idx) {
+        if (xs[class_idx].empty()) continue;
+        auto p = matplot::plot(xs[class_idx], ys[class_idx], ".");
+        p->marker_size(3.0);
+    }
+
+    matplot::title("Scatter Plot");
+    matplot::xlabel("x");
+    matplot::ylabel("y");
+    matplot::axis(matplot::equal);
+    matplot::xlim({xmin - x_pad, xmax + x_pad});
+    matplot::ylim({ymin - y_pad, ymax + y_pad});
+    matplot::grid(matplot::on);
+
+    matplot::save(path);
+#endif
 }
 
 // activations
@@ -2489,7 +2460,17 @@ int main()
     set_global_seed(0);
     set_thread_stream_id(0);
 
-    // loading dataset
+    // testing data plotting with generated data
+    Matrix X_generated;
+    Matrix y_generated;
+    generate_spiral_data(1000, 3, X_generated, y_generated);
+
+    const string path = "plot.png";
+    scatter_plot(path, X_generated, y_generated);
+    cout << "Data plotting complete. Plotted generated data in file: "
+         << path << "\n";
+
+    // loading real dataset
     Matrix X;
     Matrix y;
     Matrix X_test;
@@ -2523,10 +2504,6 @@ int main()
 
     Matrix preds = model.predict(X_test, 128);
     print_sample_predictions(preds, y_test, 100);
-
-    cout << "extra validation after shuffling to check if the model assumes sorted labels:\n";
-    X_test.shuffle_rows_with(y_test);
-    model.evaluate(X_test, y_test, 128);
 
     return 0;
 }
