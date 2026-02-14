@@ -1,11 +1,11 @@
 .vscode/
 
-NNFS.pdf
+NeuralCore.pdf
 
 plot.*
 
-NNFS_Diploma
-NNFS_Diploma.exe
+neural_core_app
+neural_core_app.exe
 doctest.h
 tests
 tests_bin
@@ -14,6 +14,7 @@ tests.gcno
 *.exe
 *.out
 
+fashion_mnist/
 *.gz
 t10k-images-idx3-ubyte
 t10k-labels-idx1-ubyte

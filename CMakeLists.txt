@@ -11,7 +11,7 @@
 # cmake --build <build-dir> -j
 
 cmake_minimum_required(VERSION 3.15)
-project(NNFS_Diploma LANGUAGES CXX)
+project(NeuralCore LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -20,13 +20,35 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 option(ENABLE_MATPLOT "Enable Matplot++ plotting" OFF)
 option(ENABLE_COVERAGE "Enable coverage instrumentation + gcovr target" OFF)
 
+# library scaffold for incremental refactor
+# keep app/tests unchanged for now; they still build from current sources
+add_library(neural_core STATIC
+  neural_core.cpp
+  src/data.cpp
+  src/scatter_plot.cpp
+  src/core_utils.cpp
+  src/rng.cpp
+  src/matrix.cpp
+)
+target_compile_definitions(neural_core PRIVATE NEURAL_CORE_NO_MAIN)
+target_include_directories(neural_core PUBLIC ${CMAKE_SOURCE_DIR} ${CMAKE_SOURCE_DIR}/include)
+
 # run main app
 # cmake --build <build-dir> --target run
-add_executable(NNFS_Diploma NNFS_Diploma.cpp)
+add_executable(neural_core_app
+  neural_core.cpp
+  src/data.cpp
+  src/scatter_plot.cpp
+  src/core_utils.cpp
+  src/rng.cpp
+  src/matrix.cpp
+)
+target_include_directories(neural_core_app PRIVATE ${CMAKE_SOURCE_DIR}/include)
+target_include_directories(neural_core_app PRIVATE ${CMAKE_SOURCE_DIR})
 
 add_custom_target(run
-  COMMAND $<TARGET_FILE:NNFS_Diploma>
-  DEPENDS NNFS_Diploma
+  COMMAND $<TARGET_FILE:neural_core_app>
+  DEPENDS neural_core_app
   WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
 )
 
@@ -34,8 +56,15 @@ add_custom_target(run
 # cmake --build <build-dir> --target check
 enable_testing()
 
-add_executable(tests tests.cpp)
-target_include_directories(tests PRIVATE ${CMAKE_SOURCE_DIR})
+add_executable(tests
+  tests.cpp
+  src/data.cpp
+  src/scatter_plot.cpp
+  src/core_utils.cpp
+  src/rng.cpp
+  src/matrix.cpp
+)
+target_include_directories(tests PRIVATE ${CMAKE_SOURCE_DIR} ${CMAKE_SOURCE_DIR}/include)
 
 add_test(NAME tests COMMAND $<TARGET_FILE:tests>)
 set_tests_properties(tests PROPERTIES WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
@@ -47,23 +76,23 @@ add_custom_target(check
 
 # warnings + optimization policy (target-based)
 if (MSVC)
-  set(NNFS_WARNINGS /W4)
+  set(NEURAL_CORE_WARNINGS /W4)
 else()
-  set(NNFS_WARNINGS -Wall -Wextra)
+  set(NEURAL_CORE_WARNINGS -Wall -Wextra)
 endif()
 
-target_compile_options(NNFS_Diploma PRIVATE ${NNFS_WARNINGS})
-target_compile_options(tests PRIVATE ${NNFS_WARNINGS})
+target_compile_options(neural_core_app PRIVATE ${NEURAL_CORE_WARNINGS})
+target_compile_options(tests PRIVATE ${NEURAL_CORE_WARNINGS})
 
 if (NOT MSVC)
-  target_compile_options(NNFS_Diploma PRIVATE $<$<CONFIG:Release>:-O2>)
+  target_compile_options(neural_core_app PRIVATE $<$<CONFIG:Release>:-O2>)
   target_compile_options(tests PRIVATE $<$<CONFIG:Release>:-O2>)
 
-  target_compile_options(NNFS_Diploma PRIVATE $<$<CONFIG:RelWithDebInfo>:-O2>)
+  target_compile_options(neural_core_app PRIVATE $<$<CONFIG:RelWithDebInfo>:-O2>)
   target_compile_options(tests PRIVATE $<$<CONFIG:RelWithDebInfo>:-O2>)
 endif()
 
-target_compile_definitions(NNFS_Diploma PRIVATE $<$<CONFIG:Release>:NDEBUG>)
+target_compile_definitions(neural_core_app PRIVATE $<$<CONFIG:Release>:NDEBUG>)
 target_compile_definitions(tests PRIVATE $<$<CONFIG:Release>:NDEBUG>)
 
 # run coverage (requires configure with -DENABLE_COVERAGE=ON)
@@ -85,7 +114,7 @@ if (ENABLE_COVERAGE)
     COMMAND ${CMAKE_CTEST_COMMAND} --quiet --output-on-failure
     COMMAND ${GCOVR_EXECUTABLE}
             -r ${CMAKE_SOURCE_DIR}
-            --filter "${CMAKE_SOURCE_DIR}/NNFS_Diploma.cpp"
+            --filter "${CMAKE_SOURCE_DIR}/neural_core.cpp"
             --filter "${CMAKE_SOURCE_DIR}/tests.cpp"
             --exclude-noncode-lines
     DEPENDS tests
@@ -118,10 +147,10 @@ if (ENABLE_MATPLOT)
   FetchContent_MakeAvailable(matplotplusplus)
 
   if (TARGET matplot)
-    target_link_libraries(NNFS_Diploma PRIVATE matplot)
+    target_link_libraries(neural_core_app PRIVATE matplot)
   elseif (TARGET Matplot++::matplot)
-    target_link_libraries(NNFS_Diploma PRIVATE Matplot++::matplot)
+    target_link_libraries(neural_core_app PRIVATE Matplot++::matplot)
   endif()
 
-  target_compile_definitions(NNFS_Diploma PRIVATE ENABLE_MATPLOT)
+  target_compile_definitions(neural_core_app PRIVATE ENABLE_MATPLOT)
 endif()

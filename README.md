@@ -1,1 +1,1 @@
-# NNFS-Diploma
+# Neural Core

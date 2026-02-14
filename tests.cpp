@@ -6,8 +6,8 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include "doctest.h"
 
-#define NNFS_NO_MAIN
-#include "NNFS_Diploma.cpp"
+#define NEURAL_CORE_NO_MAIN
+#include "neural_core.cpp"
 
 using std::thread;
 using std::streambuf;
