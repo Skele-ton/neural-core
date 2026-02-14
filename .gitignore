@@ -26,6 +26,9 @@ mnist_reader_common.hpp
 
 Testing/
 
+full_model.bin
+model_params.bin
+
 *.o
 *.obj
 

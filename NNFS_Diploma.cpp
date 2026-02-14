@@ -6,6 +6,7 @@
 #include <limits>
 #include <string>
 #include <cctype>
+#include <cstring>
 #include <filesystem>
 #include <algorithm>
 #include <atomic>
@@ -17,7 +18,15 @@
 #endif
 
 using std::cout;
+using std::is_trivially_copyable_v;
+using std::istream;
+using std::ifstream;
+using std::ostream;
+using std::ofstream;
+using std::streamsize;
+using std::ios;
 using std::vector;
+using std::unique_ptr;
 using std::runtime_error;
 using std::size_t;
 using std::string;
@@ -29,10 +38,13 @@ using std::uniform_real_distribution;
 using std::uniform_int_distribution;
 using std::seed_seq;
 using std::random_device;
+using std::exception;
 using std::memory_order_relaxed;
 using std::memory_order_release;
 using std::memory_order_acquire;
 using std::swap;
+using std::move;
+using std::memcmp;
 using std::min;
 using std::max;
 using std::round;
@@ -46,10 +58,7 @@ using std::log;
 using std::isfinite;
 using std::transform;
 using std::tolower;
-
-// TODO: add save_params, load_params, save, load methods to the model class
-//       maybe find a cpp library for reading/writing objects to files
-// TODO: seperate project into multiple files
+using std::make_unique;
 
 inline bool is_whole_number(double v, double epsilon = 1e-7)
 {
@@ -354,30 +363,6 @@ public:
         return sum / (rows * cols);
     }
 
-    static Matrix dot(const Matrix& a, const Matrix& b)
-    {
-        if (a.is_empty() || b.is_empty()) {
-            throw runtime_error("Matrix::dot: matrices must not be empty");
-        }
-
-        if (a.get_cols() != b.get_rows()) {
-            throw runtime_error("Matrix::dot: matrices have incompatible shapes");
-        }
-
-        Matrix result(a.get_rows(), b.get_cols(), 0.0);
-
-        for (size_t i = 0; i < a.get_rows(); ++i) {
-            for (size_t k = 0; k < a.get_cols(); ++k) {
-                double aik = a(i, k);
-                for (size_t j = 0; j < b.get_cols(); ++j) {
-                    result(i, j) += aik * b(k, j);
-                }
-            }
-        }
-
-        return result;
-    }
-
     // method for shuffling input data, where the base matrix is 2D and y is it's 1D labels
     void shuffle_rows_with(Matrix& y)
     {
@@ -405,6 +390,45 @@ public:
                 swap(y(i, 0), y(j, 0));
             }
         }
+    }
+
+    static Matrix dot(const Matrix& a, const Matrix& b)
+    {
+        if (a.is_empty() || b.is_empty()) {
+            throw runtime_error("Matrix::dot: matrices must not be empty");
+        }
+
+        if (a.get_cols() != b.get_rows()) {
+            throw runtime_error("Matrix::dot: matrices have incompatible shapes");
+        }
+
+        Matrix result(a.get_rows(), b.get_cols(), 0.0);
+
+        for (size_t i = 0; i < a.get_rows(); ++i) {
+            for (size_t k = 0; k < a.get_cols(); ++k) {
+                double aik = a(i, k);
+                for (size_t j = 0; j < b.get_cols(); ++j) {
+                    result(i, j) += aik * b(k, j);
+                }
+            }
+        }
+
+        return result;
+    }
+
+    static double max_absolute_difference(const Matrix& a, const Matrix& b)
+    {
+        a.require_shape(b.get_rows(), b.get_cols(), "Matrix::max_absolute_difference: shape mismatch");
+
+        double m = 0.0;
+        for (size_t i = 0; i < a.get_rows(); ++i) {
+            for (size_t j = 0; j < a.get_cols(); ++j) {
+                const double d = abs(a(i, j) - b(i, j));
+                if (d > m) m = d;
+            }
+        }
+
+        return m;
     }
 
     size_t get_rows() const { return rows; }
@@ -2073,28 +2097,64 @@ private:
 class Model
 {
 public:
-    void add(Layer& layer)
+    Model() = default;
+
+    Model(const Model&) = delete;
+    Model& operator=(const Model&) = delete;
+    Model(Model&&) noexcept = default;
+    Model& operator=(Model&&) noexcept = default;
+
+    void clear()
     {
-        layers.push_back(&layer);
-        if (auto* dense = dynamic_cast<LayerDense*>(&layer)) {
-            // currently trainable layers check only for dense layers
-            // if any other layer types (outside of dropout) are added later this method would need to be updated
-            trainable_layers.push_back(dense);
-        }
+        input_layer = LayerInput();
+        layers.clear();
+        architecture.clear();
+
+        loss = nullptr;
+        accuracy = nullptr;
+        optimizer = nullptr;
+        loss_is_cce = false;
+
+        invalidate_compiled_state();
     }
 
-    void set(Loss& loss_obj, Accuracy& accuracy_obj, Optimizer* optimizer_obj = nullptr)
+    LayerDense& add_dense(size_t n_neurons, const string& activation_name,
+                          double w_l1 = 0.0, double w_l2 = 0.0, double b_l1 = 0.0, double b_l2 = 0.0)
+    {
+        const ActivationKind k = string_to_activation_kind(activation_name);
+        return add_dense_to_model(n_neurons, k, w_l1, w_l2, b_l1, b_l2);
+    }
+
+    LayerDropout& add_dropout(double dropout_rate)
+    {
+        LayerDesc d;
+        d.kind = LayerKind::Dropout;
+        d.dropout.dropout_rate = dropout_rate;
+
+        architecture.push_back(d);
+
+        auto layer = make_unique<LayerDropout>(dropout_rate);
+        LayerDropout& ref = *layer;
+        layers.push_back(move(layer));
+
+        invalidate_compiled_state();
+
+        return ref;
+    }
+
+    void configure(Loss& loss_obj, Accuracy& accuracy_obj, Optimizer* optimizer_obj = nullptr)
     {
         loss = &loss_obj;
         accuracy = &accuracy_obj;
-        optimizer = optimizer_obj;        
-
+        optimizer = optimizer_obj;
         loss_is_cce = (dynamic_cast<LossCategoricalCrossEntropy*>(loss) != nullptr);
+
+        if (finalized) update_combined_flag();
     }
 
-    void set(Loss& loss_obj, Accuracy& accuracy_obj, Optimizer& optimizer_obj)
+    void configure(Loss& loss_obj, Accuracy& accuracy_obj, Optimizer& optimizer_obj)
     {
-        set(loss_obj, accuracy_obj, &optimizer_obj);
+        configure(loss_obj, accuracy_obj, &optimizer_obj);
     }
 
     void finalize()
@@ -2102,9 +2162,18 @@ public:
         if (layers.empty()) {
             throw runtime_error("Model::finalize: no layers added");
         }
-        if (dynamic_cast<LayerDropout*>(layers.back()) != nullptr) {
+        if (architecture.empty()) {
+            throw runtime_error("Model::finalize: internal error (empty architecture)");
+        }
+        if (layers.size() != architecture.size()) {
+            throw runtime_error("Model::finalize: internal error (layers/spec size mismatch)");
+        }
+        if (architecture.back().kind == LayerKind::Dropout) {
             throw runtime_error("Model::finalize: final layer cannot be dropout");
         }
+
+        rebuild_caches();
+        update_combined_flag();
 
         finalized = true;
     }
@@ -2125,7 +2194,7 @@ public:
             throw runtime_error("Model::train: batch_size cannot exceed number of samples aka X.get_rows()");
         }
 
-        size_t samples = X.get_rows();
+        const size_t samples = X.get_rows();
 
         Matrix Y;
         if (y.get_rows() == 1 && y.get_cols() == samples) {
@@ -2139,8 +2208,6 @@ public:
 
         const size_t steps = calc_steps(samples, batch_size);
 
-        const Activation* last_activation = layers.back()->get_activation();
-
         for (size_t epoch = 1; epoch <= epochs; ++epoch) {
             cout << "epoch: " << epoch << '\n';
 
@@ -2148,14 +2215,11 @@ public:
             accuracy->new_pass();
 
             for (size_t step = 0; step < steps; ++step) {
-                Matrix batch_X;
-                Matrix batch_y;
-
+                Matrix batch_X, batch_y;
                 slice_batch(X, &Y, step, batch_size, batch_X, &batch_y);
 
                 forward_pass(batch_X, true);
 
-                // calculating loss and accuracy
                 double reg_loss = 0.0;
                 const double data_loss = loss->calculate(output, batch_y, reg_loss, trainable_layers);
                 const double total_loss = data_loss + reg_loss;
@@ -2163,18 +2227,14 @@ public:
                 last_predictions = last_activation->predictions(output);
                 const double acc = accuracy->calculate(last_predictions, batch_y);
 
-                // backward pass
-                const bool use_combined = (dynamic_cast<const ActivationSoftmax*>(last_activation) != nullptr) && loss_is_cce;
-
-                const Matrix* dvalues;
+                const Matrix* dvalues = nullptr;
                 auto iter = layers.rbegin();
 
-                if (use_combined) {
+                if (use_combined_softmax_ce) {
                     combined_softmax_ce.backward(output, batch_y);
                     dvalues = &combined_softmax_ce.get_dinputs();
 
-                    Layer* last_layer = *iter;
-
+                    Layer* last_layer = iter->get();
                     last_layer->backward(*dvalues, false);
                     dvalues = &last_layer->get_dinputs();
                     ++iter;
@@ -2188,14 +2248,12 @@ public:
                     dvalues = &(*iter)->get_dinputs();
                 }
 
-                // using optimizers
                 optimizer->pre_update_params();
                 for (LayerDense* dense : trainable_layers) {
                     optimizer->update_params(*dense);
                 }
                 optimizer->post_update_params();
 
-                // printing
                 if (print_every != 0 && ((step % print_every) == 0 || step == steps - 1)) {
                     cout << "  step: " << step
                          << ", accuracy: " << acc
@@ -2212,6 +2270,7 @@ public:
             const double epoch_data_loss = loss->calculate_accumulated(epoch_reg_loss, trainable_layers);
             const double epoch_loss = epoch_data_loss + epoch_reg_loss;
             const double epoch_accuracy = accuracy->calculate_accumulated();
+
             cout << "training - accuracy: " << epoch_accuracy
                  << ", loss: " << epoch_loss
                  << " (data loss: " << epoch_data_loss
@@ -2224,7 +2283,7 @@ public:
         }
     }
 
-    void  evaluate(const Matrix& X, const Matrix& y, size_t batch_size = 0, bool reinit = true)
+    void evaluate(const Matrix& X, const Matrix& y, size_t batch_size = 0, bool reinit = true)
     {
         if (!finalized) finalize();
 
@@ -2239,7 +2298,7 @@ public:
             throw runtime_error("Model::evaluate: batch_size cannot exceed number of samples aka X.get_rows()");
         }
 
-        size_t samples = X.get_rows();
+        const size_t samples = X.get_rows();
 
         Matrix Y;
         if (y.get_rows() == 1 && y.get_cols() == samples) {
@@ -2250,17 +2309,14 @@ public:
         }
 
         if (reinit) accuracy->init(Y);
+
         loss->new_pass();
         accuracy->new_pass();
 
         const size_t steps = calc_steps(samples, batch_size);
 
-        const Activation* last_activation = layers.back()->get_activation();
-
         for (size_t step = 0; step < steps; ++step) {
-            Matrix batch_X;
-            Matrix batch_y;
-
+            Matrix batch_X, batch_y;
             slice_batch(X, &Y, step, batch_size, batch_X, &batch_y);
 
             forward_pass(batch_X, false);
@@ -2288,17 +2344,13 @@ public:
         }
 
         const size_t samples = X.get_rows();
-
         const size_t steps = calc_steps(samples, batch_size);
 
         Matrix predictions;
         bool preds_init = false;
 
-        const Activation* last_activation = layers.back()->get_activation();
-
         for (size_t step = 0; step < steps; ++step) {
             Matrix batch_X;
-
             slice_batch(X, nullptr, step, batch_size, batch_X, nullptr);
 
             forward_pass(batch_X, false);
@@ -2324,49 +2376,260 @@ public:
         return predictions;
     }
 
+    void save_params(const string& path)
+    {
+        if (path.empty()) throw runtime_error("Model::save_params: invalid path");
+        if (!finalized) finalize();
+
+        require_dense_params_initialized();
+
+        ofstream f(path, ios::binary);
+        if (!f) throw runtime_error("Model::save_params: failed to open file");
+
+        constexpr char magic[11] = {'M','O','D','E','L','P','A','R','A','M','S'};
+        write_exact(f, magic, sizeof(magic));
+
+        const uint64_t dense_count = static_cast<uint64_t>(dense_layers_count());
+        write_trivial(f, dense_count);
+
+        for (const LayerDense* layer : trainable_layers) {
+            write_matrix(f, layer->weights);
+            write_matrix(f, layer->biases);
+        }
+    }
+
+    void load_params(const string& path)
+    {
+        if (path.empty()) throw runtime_error("Model::load_params: invalid path");
+        if (!finalized) finalize();
+
+        ifstream f(path, ios::binary);
+        if (!f) throw runtime_error("Model::load_params: failed to open file");
+
+        constexpr char magic_expected[11] = {'M','O','D','E','L','P','A','R','A','M','S'};
+        char magic[11]{};
+        read_exact(f, magic, sizeof(magic));
+
+        if (memcmp(magic, magic_expected, sizeof(magic)) != 0) {
+            throw runtime_error("Model::load_params: invalid file (magic mismatch)");
+        }
+
+        const uint64_t dense_count_file = read_trivial<uint64_t>(f);
+        if (dense_count_file > static_cast<uint64_t>(numeric_limits<size_t>::max())) {
+            throw runtime_error("Model::load_params: dense layer count exceeds size_t range");
+        }
+        const size_t dense_count_model = dense_layers_count();
+        if (dense_count_file != static_cast<uint64_t>(dense_count_model)) {
+            throw runtime_error("Model::load_params: dense layer count mismatch");
+        }
+
+        vector<Matrix> params;
+        multiplication_overflow_check(dense_count_model, 2, "Model::load_params: params reserve size overflow");
+        params.reserve(dense_count_model * 2);
+
+        for (size_t i = 0; i < dense_count_model; ++i) {
+            params.push_back(read_matrix(f)); // weights
+            params.push_back(read_matrix(f)); // biases
+        }
+
+        set_params(params);
+    }
+
+    void save(const string& path)
+    {
+        if (path.empty()) throw runtime_error("Model::save: invalid path");
+        if (!finalized) finalize();
+
+        require_dense_params_initialized();
+
+        ofstream f(path, ios::binary);
+        if (!f) throw runtime_error("Model::save: failed to open file");
+
+        constexpr char magic[11] = {'M','O','D','E','L','O','B','J','E','C','T'};
+        write_exact(f, magic, sizeof(magic));
+
+        const uint64_t layers_count = static_cast<uint64_t>(architecture.size());
+        write_trivial(f, layers_count);
+
+        for (const LayerDesc& d : architecture) {
+            write_trivial<uint8_t>(f, static_cast<uint8_t>(d.kind));
+
+            if (d.kind == LayerKind::Dense) {
+                write_trivial<uint64_t>(f, static_cast<uint64_t>(d.dense.n_neurons));
+                write_trivial<uint8_t>(f, static_cast<uint8_t>(d.dense.activation));
+                write_trivial<double>(f, d.dense.w_l1);
+                write_trivial<double>(f, d.dense.w_l2);
+                write_trivial<double>(f, d.dense.b_l1);
+                write_trivial<double>(f, d.dense.b_l2);
+            } else if (d.kind == LayerKind::Dropout) {
+                write_trivial<double>(f, d.dropout.dropout_rate);
+            } else {
+                throw runtime_error("Model::save: unsupported layer kind");
+            }
+        }
+
+        const uint64_t dense_count = static_cast<uint64_t>(dense_layers_count());
+        write_trivial(f, dense_count);
+
+        for (const LayerDense* layer : trainable_layers) {
+            write_matrix(f, layer->weights);
+            write_matrix(f, layer->biases);
+        }
+    }
+
+    static Model load(const string& path)
+    {
+        if (path.empty()) throw runtime_error("Model::load: invalid path");
+
+        ifstream f(path, ios::binary);
+        if (!f) throw runtime_error("Model::load: failed to open file");
+
+        constexpr char magic_expected[11] = {'M','O','D','E','L','O','B','J','E','C','T'};
+        char magic[11]{};
+        read_exact(f, magic, sizeof(magic));
+
+        if (memcmp(magic, magic_expected, sizeof(magic)) != 0) {
+            throw runtime_error("Model::load: invalid file (magic mismatch)");
+        }
+
+        const uint64_t layers_count = read_trivial<uint64_t>(f);
+        if (layers_count == 0) throw runtime_error("Model::load: empty architecture");
+        if (layers_count > static_cast<uint64_t>(numeric_limits<size_t>::max())) {
+            throw runtime_error("Model::load: layer count exceeds size_t range");
+        }
+
+        vector<LayerDesc> arch;
+        arch.reserve(static_cast<size_t>(layers_count));
+
+        for (uint64_t i = 0; i < layers_count; ++i) {
+            LayerDesc d;
+
+            const uint8_t kind_u8 = read_trivial<uint8_t>(f);
+            if (kind_u8 > static_cast<uint8_t>(LayerKind::Dropout)) {
+                throw runtime_error("Model serialization: invalid LayerKind");
+            }
+            d.kind = static_cast<LayerKind>(kind_u8);
+
+            if (d.kind == LayerKind::Dense) {
+                const uint64_t n_neurons_u64 = read_trivial<uint64_t>(f);
+                if (n_neurons_u64 == 0) {
+                    throw runtime_error("Model::load: dense layer n_neurons must be > 0");
+                }
+                if (n_neurons_u64 > static_cast<uint64_t>(numeric_limits<size_t>::max())) {
+                    throw runtime_error("Model::load: dense layer n_neurons exceeds size_t range");
+                }
+                d.dense.n_neurons = static_cast<size_t>(n_neurons_u64);
+
+                const uint8_t activation_u8 = read_trivial<uint8_t>(f);
+                if (activation_u8 > static_cast<uint8_t>(ActivationKind::Linear)) {
+                    throw runtime_error("Model serialization: invalid ActivationKind");
+                }
+                d.dense.activation = static_cast<ActivationKind>(activation_u8);
+
+                d.dense.w_l1 = read_trivial<double>(f);
+                d.dense.w_l2 = read_trivial<double>(f);
+                d.dense.b_l1 = read_trivial<double>(f);
+                d.dense.b_l2 = read_trivial<double>(f);
+            } else if (d.kind == LayerKind::Dropout) {
+                d.dropout.dropout_rate = read_trivial<double>(f);
+            } else {
+                throw runtime_error("Model::load: unsupported layer kind");
+            }
+
+            arch.push_back(d);
+        }
+
+        const uint64_t dense_count_file = read_trivial<uint64_t>(f);
+        if (dense_count_file > static_cast<uint64_t>(numeric_limits<size_t>::max())) {
+            throw runtime_error("Model::load: dense layer count exceeds size_t range");
+        }
+
+        size_t dense_count_arch = 0;
+        for (const LayerDesc& d : arch) {
+            if (d.kind == LayerKind::Dense) ++dense_count_arch;
+        }
+        if (dense_count_file != static_cast<uint64_t>(dense_count_arch)) {
+            throw runtime_error("Model::load: dense layer count mismatch");
+        }
+
+        vector<Matrix> params;
+        multiplication_overflow_check(dense_count_arch, 2, "Model::load: params reserve size overflow");
+        params.reserve(dense_count_arch * 2);
+
+        for (size_t i = 0; i < dense_count_arch; ++i) {
+            params.push_back(read_matrix(f));
+            params.push_back(read_matrix(f));
+        }
+
+        Model m;
+        m.set_architecture(arch); // private, ok here
+        m.set_params(params);     // finalizes
+        return m;
+    }
+
     vector<Matrix> get_params() const
     {
         vector<Matrix> params;
-        params.reserve(trainable_layers.size() * 2);
-        for (const LayerDense* layer : trainable_layers) {
-            if (!layer) continue;
-            params.push_back(layer->weights);
-            params.push_back(layer->biases);
+
+        for (const auto& p : layers) {
+            const auto* dense = dynamic_cast<const LayerDense*>(p.get());
+            if (!dense) continue;
+
+            if (dense->weights.is_empty() || dense->biases.is_empty()) {
+                throw runtime_error("Model::get_params: weights/biases not initialized (run predict/train or load params first)");
+            }
+
+            params.push_back(dense->weights);
+            params.push_back(dense->biases);
         }
+
         return params;
     }
 
     void set_params(const vector<Matrix>& params)
     {
-        if (trainable_layers.empty()) {
-            if (!params.empty()) {
-                throw runtime_error("Model::set_params: no trainable layers in model");
-            }
-            return;
+        if (!finalized) finalize();
+
+        size_t dense_count = dense_layers_count();
+        if (dense_count != trainable_layers.size()) {
+            throw runtime_error("Model::set_params: internal error (dense_count != trainable_layers.size())");
         }
 
-        const size_t layers_size = trainable_layers.size();
-        if (params.size() != layers_size * 2) {
-            throw runtime_error("Model::set_params: params size must be 2 * trainable_layers.size()");
+        if (params.size() != dense_count * 2) {
+            throw runtime_error("Model::set_params: params size must be 2 * number_of_dense_layers");
         }
 
-        for (size_t i = 0; i < layers_size; ++i) {
-            const Matrix& w = params[i * 2];
-            const Matrix& b = params[i * 2 + 1];
+        size_t dense_idx = 0;
+        for (const LayerDesc& d : architecture) {
+            if (d.kind != LayerKind::Dense) continue;
+
+            const Matrix& w = params[dense_idx * 2];
+            const Matrix& b = params[dense_idx * 2 + 1];
 
             w.require_non_empty("Model::set_params: weights must be non-empty");
             b.require_non_empty("Model::set_params: biases must be non-empty");
-            b.require_shape(1, w.get_cols(), "Model::set_params: biases must have shape (1, n_neurons)");
 
-            if (i > 0) {
-                const Matrix& prev_w = params[(i - 1) * 2];
-                prev_w.require_cols(w.get_rows(), "Model::set_params: consecutive weight matrices must be shape-compatible");
+            if (w.get_cols() != d.dense.n_neurons) {
+                throw runtime_error("Model::set_params: weights cols must match architecture n_neurons");
+            }
+            b.require_shape(1, d.dense.n_neurons,
+                            "Model::set_params: biases must have shape (1, n_neurons)");
+
+            if (dense_idx > 0) {
+                const Matrix& prev_w = params[(dense_idx - 1) * 2];
+                prev_w.require_cols(w.get_rows(),
+                                    "Model::set_params: consecutive dense weight matrices must be shape-compatible");
             }
 
-            LayerDense* layer = trainable_layers[i];
+            LayerDense* layer = trainable_layers[dense_idx];
+            if (!layer) {
+                throw runtime_error("Model::set_params: internal error (null trainable layer)");
+            }
 
             layer->weights = w;
-            layer->biases = b;
+            layer->biases  = b;
+
+            ++dense_idx;
         }
     }
 
@@ -2374,20 +2637,195 @@ public:
     const Matrix& get_last_predictions() const { return last_predictions; }
 
 private:
+    enum class LayerKind { Dense, Dropout };
+    enum class ActivationKind { ReLU, Softmax, Sigmoid, Linear };
+
+    struct DenseDesc
+    {
+        size_t n_neurons = 0;
+        ActivationKind activation = ActivationKind::ReLU;
+        double w_l1 = 0.0, w_l2 = 0.0, b_l1 = 0.0, b_l2 = 0.0;
+    };
+
+    struct DropoutDesc
+    {
+        double dropout_rate = 0.0;
+    };
+
+    struct LayerDesc
+    {
+        LayerKind kind = LayerKind::Dense;
+        DenseDesc dense;
+        DropoutDesc dropout;
+    };
+
     LayerInput input_layer;
-    vector<Layer*> layers;
+    vector<unique_ptr<Layer>> layers;
     vector<LayerDense*> trainable_layers;
+
+    vector<LayerDesc> architecture;
 
     Loss* loss = nullptr;
     bool loss_is_cce = false;
     Accuracy* accuracy = nullptr;
     Optimizer* optimizer = nullptr;
+
     bool finalized = false;
+
+    const Activation* last_activation = nullptr;
+    ActivationKind last_activation_kind = ActivationKind::Linear;
+    bool use_combined_softmax_ce = false;
 
     Matrix output;
     Matrix last_predictions;
 
     ActivationSoftmaxLossCategoricalCrossEntropy combined_softmax_ce;
+
+    static ActivationKind string_to_activation_kind(string name)
+    {
+        transform(name.begin(), name.end(), name.begin(),
+                  [](unsigned char c) { return static_cast<char>(tolower(c)); });
+
+        if (name == "relu") return ActivationKind::ReLU;
+        if (name == "softmax") return ActivationKind::Softmax;
+        if (name == "sigmoid") return ActivationKind::Sigmoid;
+        if (name == "linear") return ActivationKind::Linear;
+
+        throw runtime_error("Model unknown activation. use relu, softmax, sigmoid or linear");
+    }
+
+    static string activation_kind_to_string(ActivationKind k)
+    {
+        switch (k) {
+        case ActivationKind::ReLU: return "relu";
+        case ActivationKind::Softmax: return "softmax";
+        case ActivationKind::Sigmoid: return "sigmoid";
+        case ActivationKind::Linear: return "linear";
+        default: throw runtime_error("Model: unknown ActivationKind");
+        }
+    }
+
+    void require_dense_params_initialized() const
+    {
+        for (const LayerDense* layer : trainable_layers) {
+            if (!layer) throw runtime_error("Model: internal error (null dense layer)");
+            if (layer->weights.is_empty() || layer->biases.is_empty()) {
+                throw runtime_error("Model: dense weights/biases are not initialized (run train/predict or load params first)");
+            }
+        }
+    }
+
+    size_t dense_layers_count() const
+    {
+        size_t n = 0;
+        for (const LayerDesc& d : architecture) {
+            if (d.kind == LayerKind::Dense) ++n;
+        }
+        return n;
+    }
+
+    void invalidate_compiled_state()
+    {
+        finalized = false;
+
+        trainable_layers.clear();
+
+        last_activation = nullptr;
+        last_activation_kind = ActivationKind::Linear;
+        use_combined_softmax_ce = false;
+
+        output = Matrix();
+        last_predictions = Matrix();
+    }
+
+    LayerDense& add_dense_to_model(size_t n_neurons, ActivationKind activation_kind,
+                          double w_l1 = 0.0, double w_l2 = 0.0, double b_l1 = 0.0, double b_l2 = 0.0)
+    {
+        LayerDesc d;
+        d.kind = LayerKind::Dense;
+        d.dense.n_neurons = n_neurons;
+        d.dense.activation = activation_kind;
+        d.dense.w_l1 = w_l1;
+        d.dense.w_l2 = w_l2;
+        d.dense.b_l1 = b_l1;
+        d.dense.b_l2 = b_l2;
+
+        architecture.push_back(d);
+
+        auto layer = make_unique<LayerDense>(
+            n_neurons, activation_kind_to_string(activation_kind),
+            w_l1, w_l2, b_l1, b_l2);
+
+        LayerDense& ref = *layer;
+        layers.push_back(move(layer));
+
+        invalidate_compiled_state();
+
+        return ref;
+    }
+
+    void set_architecture(const vector<LayerDesc>& arch)
+    {
+        if (arch.empty()) {
+            throw runtime_error("Model::set_architecture: empty architecture");
+        }
+        if (arch.back().kind == LayerKind::Dropout) {
+            throw runtime_error("Model::set_architecture: final layer cannot be dropout");
+        }
+
+        vector<unique_ptr<Layer>> new_layers;
+        new_layers.reserve(arch.size());
+
+        for (const LayerDesc& d : arch) {
+            if (d.kind == LayerKind::Dense) {
+                new_layers.push_back(make_unique<LayerDense>(
+                    d.dense.n_neurons,
+                    activation_kind_to_string(d.dense.activation),
+                    d.dense.w_l1, d.dense.w_l2, d.dense.b_l1, d.dense.b_l2));
+            } else if (d.kind == LayerKind::Dropout) {
+                new_layers.push_back(make_unique<LayerDropout>(d.dropout.dropout_rate));
+            } else {
+                throw runtime_error("Model::set_architecture: unsupported layer kind");
+            }
+        }
+
+        clear();
+        layers.swap(new_layers);
+        architecture = arch;
+    }
+
+    void rebuild_caches()
+    {
+        if (layers.size() != architecture.size()) {
+            throw runtime_error("Model: internal error (layers/spec size mismatch)");
+        }
+
+        trainable_layers.clear();
+
+        for (auto& p : layers) {
+            if (auto* dense = dynamic_cast<LayerDense*>(p.get())) {
+                trainable_layers.push_back(dense);
+            }
+        }
+
+        last_activation = layers.back()->get_activation();
+        if (!last_activation) {
+            throw runtime_error("Model: last layer has null activation");
+        }
+
+        const LayerDesc& last = architecture.back();
+        if (last.kind != LayerKind::Dense) {
+            throw runtime_error("Model: internal error (last layer kind is not Dense)");
+        }
+        last_activation_kind = last.dense.activation;
+    }
+
+    void update_combined_flag()
+    {
+        use_combined_softmax_ce = false;
+        if (!loss) return;
+        use_combined_softmax_ce = (last_activation_kind == ActivationKind::Softmax) && loss_is_cce;
+    }
 
     static size_t calc_steps(size_t samples, size_t batch_size)
     {
@@ -2398,7 +2836,7 @@ private:
         return steps;
     }
 
-    static void slice_batch(const Matrix& X, const Matrix* Y, size_t step, 
+    static void slice_batch(const Matrix& X, const Matrix* Y, size_t step,
                             size_t batch_size, Matrix& batch_X, Matrix* batch_Y)
     {
         if (batch_size == 0) {
@@ -2418,93 +2856,199 @@ private:
         input_layer.forward(X);
 
         const Matrix* current = &input_layer.get_output();
-        for (Layer* layer : layers) {
-            layer->forward(*current, training);
-            current = &layer->get_output();
+        for (auto& p : layers) {
+            p->forward(*current, training);
+            current = &p->get_output();
         }
 
         output = *current;
     }
+
+    static void write_exact(ostream& os, const void* data, size_t bytes)
+    {
+        os.write(static_cast<const char*>(data), static_cast<streamsize>(bytes));
+        if (!os) throw runtime_error("Model serialization: write failed");
+    }
+
+    template<class T>
+    static void write_trivial(ostream& os, const T& v)
+    {
+        static_assert(is_trivially_copyable_v<T>);
+        write_exact(os, &v, sizeof(T));
+    }
+
+    static void read_exact(istream& is, void* data, size_t bytes)
+    {
+        is.read(static_cast<char*>(data), static_cast<streamsize>(bytes));
+        if (!is) throw runtime_error("Model serialization: read failed");
+    }
+    
+    template<class T>
+    static T read_trivial(istream& is)
+    {
+        static_assert(is_trivially_copyable_v<T>);
+        T v{};
+        read_exact(is, &v, sizeof(T));
+        return v;
+    }
+
+    static void write_matrix(ostream& os, const Matrix& m)
+    {
+        const uint64_t r = static_cast<uint64_t>(m.get_rows());
+        const uint64_t c = static_cast<uint64_t>(m.get_cols());
+        write_trivial(os, r);
+        write_trivial(os, c);
+
+        for (size_t i = 0; i < m.get_rows(); ++i) {
+            for (size_t j = 0; j < m.get_cols(); ++j) {
+                const double x = m(i, j);
+                write_trivial(os, x);
+            }
+        }
+    }
+
+    static Matrix read_matrix(istream& is)
+    {
+        const uint64_t r64 = read_trivial<uint64_t>(is);
+        const uint64_t c64 = read_trivial<uint64_t>(is);
+
+        if (r64 > static_cast<uint64_t>(numeric_limits<size_t>::max()) ||
+            c64 > static_cast<uint64_t>(numeric_limits<size_t>::max())) {
+            throw runtime_error("Model serialization: matrix shape exceeds size_t range");
+        }
+
+        const size_t r = static_cast<size_t>(r64);
+        const size_t c = static_cast<size_t>(c64);
+
+        Matrix m;
+        m.assign(r, c);
+
+        for (size_t i = 0; i < r; ++i) {
+            for (size_t j = 0; j < c; ++j) {
+                m(i, j) = read_trivial<double>(is);
+            }
+        }
+        return m;
+    }
 };
 
 #ifndef NNFS_NO_MAIN
-void print_sample_predictions(
-    const Matrix& predictions, const Matrix& y_test, size_t num_of_samples)
-{
-    const size_t pred_rows = predictions.get_rows();
-
-    cout << "predict output shape: " << pred_rows
-         << "x" << predictions.get_cols() << '\n';
-
-    const vector<string> label_names = {
-        "T-shirt/top", "Trouser", "Pullover", "Dress", "Coat",
-        "Sandal", "Shirt", "Sneaker", "Bag", "Ankle boot"
-    };
-
-    cout << "sample predictions:\n";
-    const size_t samples_to_check = min<size_t>(num_of_samples, pred_rows);
-    for (size_t i = 0; i < samples_to_check; ++i) {
-        const size_t pred_id = (pred_rows == 1) ? predictions.as_size_t(0, i) : predictions.as_size_t(i, 0);
-        const size_t true_id = (y_test.get_rows() == 1) ? y_test.as_size_t(0, i) : y_test.as_size_t(i, 0);
-
-        cout << "  sample " << i
-             << " - predicted: " << label_names[pred_id] << " (" << pred_id << ")"
-             << ", actual: " << label_names[true_id] << " (" << true_id << ")"
-             << '\n';
-    }
-}
-
 int main()
 {
-    // setting up rng
-    set_global_seed(0);
-    set_thread_stream_id(0);
+    try {
+        const string params_path = "model_params.bin";
+        const string model_path  = "full_model.bin";
 
-    // testing data plotting with generated data
-    Matrix X_generated;
-    Matrix y_generated;
-    generate_spiral_data(1000, 3, X_generated, y_generated);
+        // setting up rng
+        set_global_seed(0);
+        set_thread_stream_id(0);
 
-    const string path = "plot.png";
-    scatter_plot(path, X_generated, y_generated);
-    cout << "Data plotting complete. Plotted generated data in file: "
-         << path << "\n";
+        // testing scatter plotting with generated data
+        Matrix X_generated;
+        Matrix y_generated;
+        generate_spiral_data(1000, 3, X_generated, y_generated);
 
-    // loading real dataset
-    Matrix X;
-    Matrix y;
-    Matrix X_test;
-    Matrix y_test;
+        const string path = "plot.png";
+        scatter_plot(path, X_generated, y_generated);
+        cout << "data plotting complete. generated data plot is in file: "
+             << path << "\n";
 
-    fashion_mnist_create(X, y, X_test, y_test);
+        // loading real dataset
+        Matrix X, y, X_test, y_test;
+        fashion_mnist_create(X, y, X_test, y_test);
 
-    // creating model
-    LayerDense dense1(128, "relu", 0.0, 5e-4, 0.0, 5e-4);
-    LayerDense dense2(128, "relu", 0.0, 5e-4, 0.0, 5e-4);
-    LayerDropout dropout(0.1);
-    LayerDense dense3(10, "softmax");
+        // building architecture inside model
+        Model model;
+        
+        model.add_dense(128, "relu", 0.0, 5e-4, 0.0, 5e-4);
+        model.add_dense(128, "relu", 0.0, 5e-4, 0.0, 5e-4);
+        model.add_dropout(0.1);
+        model.add_dense(10, "softmax");
 
-    LossCategoricalCrossEntropy loss;
-    AccuracyCategorical accuracy;
-    OptimizerAdam optimizer(1e-3);
+        // attaching training objects
+        LossCategoricalCrossEntropy loss;
+        AccuracyCategorical accuracy;
+        OptimizerAdam optimizer(1e-3);
 
-    Model model;
-    model.add(dense1);
-    model.add(dense2);
-    model.add(dropout);
-    model.add(dense3);
-    model.set(loss, accuracy, optimizer);
-    model.finalize();
+        model.configure(loss, accuracy, optimizer);
 
-    // using model
-    model.train(X, y, 1, 128, 100, &X_test, &y_test);
+        // training and evaluating model
+        model.train(X, y, 1, 128, 100, &X_test, &y_test);
 
-    vector<Matrix> params = model.get_params();
-    model.set_params(params);
+        // printing some predictions
+        const Matrix preds_model = model.predict(X_test, 128);
+        const size_t pred_rows = preds_model.get_rows();
 
-    Matrix preds = model.predict(X_test, 128);
-    print_sample_predictions(preds, y_test, 100);
+        cout << "predict output shape: " << pred_rows
+            << "x" << preds_model.get_cols() << '\n';
 
-    return 0;
+        const vector<string> label_names = {
+            "T-shirt/top", "Trouser", "Pullover", "Dress", "Coat",
+            "Sandal", "Shirt", "Sneaker", "Bag", "Ankle boot"
+        };
+
+        cout << "sample predictions:\n";
+        const size_t samples_to_check = min<size_t>(20, pred_rows);
+        for (size_t i = 0; i < samples_to_check; ++i) {
+            const size_t pred_id = (pred_rows == 1) ? preds_model.as_size_t(0, i) : preds_model.as_size_t(i, 0);
+            const size_t true_id = (y_test.get_rows() == 1) ? y_test.as_size_t(0, i) : y_test.as_size_t(i, 0);
+
+            cout << "  sample " << i
+                << " - predicted: " << label_names[pred_id] << " (" << pred_id << ")"
+                << ", actual: " << label_names[true_id] << " (" << true_id << ")"
+                << '\n';
+        }
+
+        model.evaluate(X_test, y_test, 128);
+
+        // setting and getting parameters
+        vector<Matrix> params = model.get_params();
+        model.set_params(params);
+
+        Matrix preds_model_set_params = model.predict(X_test, 128);
+        cout << "\ndifference in predictions after saving the model parameters to a variable and setting them back: "
+             << Matrix::max_absolute_difference(preds_model, preds_model_set_params) << '\n'
+             << "evaluation after setting model parameters:\n";
+
+        model.evaluate(X_test, y_test, 128);
+
+        // saving and loading parameters to/from file
+        model.save_params(params_path);
+
+        Model m2;
+        m2.add_dense(128, "relu", 0.0, 5e-4, 0.0, 5e-4);
+        m2.add_dense(128, "relu", 0.0, 5e-4, 0.0, 5e-4);
+        m2.add_dropout(0.1);
+        m2.add_dense(10, "softmax");
+
+        m2.load_params(params_path);
+
+        const Matrix preds_model_loaded_params = m2.predict(X_test, 128);
+        cout << "\ndifference in predictions after saving the model parameters to a file and loading them: "
+             << Matrix::max_absolute_difference(preds_model, preds_model_loaded_params) << '\n'
+             << "evaluation after loading in model parameters:\n";
+
+        m2.configure(loss, accuracy);
+        m2.evaluate(X_test, y_test, 128);
+
+        // saving and loading full model to/from file
+        model.save(model_path);
+        Model m3 = Model::load(model_path);
+
+        const Matrix preds_model_loaded_full = m3.predict(X_test, 128);
+        cout << "\ndifference in predictions after saving the full model to a file and loading it: "
+             << Matrix::max_absolute_difference(preds_model, preds_model_loaded_full) << '\n'
+             << "evaluation after loading in full model:\n";
+
+        m3.configure(loss, accuracy);
+        m3.evaluate(X_test, y_test, 128);
+
+        return 0;
+    }
+    catch (const exception& e) {
+        cout << "ERROR: " << e.what() << '\n';
+
+        return 1;
+    }
 }
 #endif

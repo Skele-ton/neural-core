@@ -1,4 +1,5 @@
 #include <sstream>
+#include <fstream>
 #include <cstdio>
 #include <thread>
 
@@ -10,8 +11,6 @@
 
 using std::thread;
 using std::streambuf;
-using std::ios;
-using std::ifstream;
 using std::ostringstream;
 using std::remove;
 
@@ -54,6 +53,26 @@ static LayerDense make_dense_with_grads(double w, double b, double dw, double db
     dvalues(0, 0) = db;
     layer.backward(dvalues);
     return layer;
+}
+
+template <typename T>
+static void write_trivial_raw(ofstream& out, const T& v)
+{
+    out.write(reinterpret_cast<const char*>(&v), static_cast<std::streamsize>(sizeof(T)));
+}
+
+static void write_matrix_raw(ofstream& out, const Matrix& m)
+{
+    const uint64_t r = static_cast<uint64_t>(m.get_rows());
+    const uint64_t c = static_cast<uint64_t>(m.get_cols());
+    write_trivial_raw(out, r);
+    write_trivial_raw(out, c);
+    for (size_t i = 0; i < m.get_rows(); ++i) {
+        for (size_t j = 0; j < m.get_cols(); ++j) {
+            const double x = m(i, j);
+            write_trivial_raw(out, x);
+        }
+    }
 }
 
 // === is_whole_number / multiplication_overflow_check ===
@@ -384,39 +403,6 @@ TEST_CASE("Matrix scalar_mean computes mean and rejects empty matrix")
                          runtime_error);
 }
 
-TEST_CASE("Matrix dot multiplies matrices and validates shapes")
-{
-    Matrix a(2, 3);
-    a(0, 0) = 1.0; a(0, 1) = 2.0; a(0, 2) = 3.0;
-    a(1, 0) = 4.0; a(1, 1) = 5.0; a(1, 2) = 6.0;
-
-    Matrix b(3, 2);
-    b(0, 0) = 7.0;  b(0, 1) = 8.0;
-    b(1, 0) = 9.0;  b(1, 1) = 10.0;
-    b(2, 0) = 11.0; b(2, 1) = 12.0;
-
-    Matrix c = Matrix::dot(a, b);
-    CHECK(c.get_rows() == 2);
-    CHECK(c.get_cols() == 2);
-    CHECK(c(0, 0) == doctest::Approx(58.0));
-    CHECK(c(0, 1) == doctest::Approx(64.0));
-    CHECK(c(1, 0) == doctest::Approx(139.0));
-    CHECK(c(1, 1) == doctest::Approx(154.0));
-
-    Matrix empty;
-    CHECK_THROWS_WITH_AS(Matrix::dot(empty, b),
-                         "Matrix::dot: matrices must not be empty",
-                         runtime_error);
-    CHECK_THROWS_WITH_AS(Matrix::dot(a, empty),
-                         "Matrix::dot: matrices must not be empty",
-                         runtime_error);
-
-    Matrix bad(4, 1, 0.0);
-    CHECK_THROWS_WITH_AS(Matrix::dot(a, bad),
-                         "Matrix::dot: matrices have incompatible shapes",
-                         runtime_error);
-}
-
 TEST_CASE("Matrix shuffle_rows_with validates inputs and shuffles with row/col labels")
 {
     Matrix empty;
@@ -464,6 +450,57 @@ TEST_CASE("Matrix shuffle_rows_with validates inputs and shuffles with row/col l
     X_one.shuffle_rows_with(y_one);
     CHECK(X_one(0, 0) == doctest::Approx(7.0));
     CHECK(y_one(0, 0) == doctest::Approx(3.0));
+}
+
+TEST_CASE("Matrix dot multiplies matrices and validates shapes")
+{
+    Matrix a(2, 3);
+    a(0, 0) = 1.0; a(0, 1) = 2.0; a(0, 2) = 3.0;
+    a(1, 0) = 4.0; a(1, 1) = 5.0; a(1, 2) = 6.0;
+
+    Matrix b(3, 2);
+    b(0, 0) = 7.0;  b(0, 1) = 8.0;
+    b(1, 0) = 9.0;  b(1, 1) = 10.0;
+    b(2, 0) = 11.0; b(2, 1) = 12.0;
+
+    Matrix c = Matrix::dot(a, b);
+    CHECK(c.get_rows() == 2);
+    CHECK(c.get_cols() == 2);
+    CHECK(c(0, 0) == doctest::Approx(58.0));
+    CHECK(c(0, 1) == doctest::Approx(64.0));
+    CHECK(c(1, 0) == doctest::Approx(139.0));
+    CHECK(c(1, 1) == doctest::Approx(154.0));
+
+    Matrix empty;
+    CHECK_THROWS_WITH_AS(Matrix::dot(empty, b),
+                         "Matrix::dot: matrices must not be empty",
+                         runtime_error);
+    CHECK_THROWS_WITH_AS(Matrix::dot(a, empty),
+                         "Matrix::dot: matrices must not be empty",
+                         runtime_error);
+
+    Matrix bad(4, 1, 0.0);
+    CHECK_THROWS_WITH_AS(Matrix::dot(a, bad),
+                         "Matrix::dot: matrices have incompatible shapes",
+                         runtime_error);
+}
+
+TEST_CASE("Matrix max_absolute_difference computes max difference and validates shape")
+{
+    Matrix a(2, 3);
+    a(0, 0) = 1.0;  a(0, 1) = -2.0; a(0, 2) = 3.0;
+    a(1, 0) = 4.0;  a(1, 1) = 5.0;  a(1, 2) = -6.0;
+
+    Matrix b(2, 3);
+    b(0, 0) = 1.25; b(0, 1) = -1.5; b(0, 2) = 2.0;
+    b(1, 0) = 4.0;  b(1, 1) = 3.4;  b(1, 2) = -6.1;
+
+    CHECK(Matrix::max_absolute_difference(a, b) == doctest::Approx(1.6));
+
+    Matrix wrong_shape(3, 2, 0.0);
+    CHECK_THROWS_WITH_AS(Matrix::max_absolute_difference(a, wrong_shape),
+                         "Matrix::max_absolute_difference: shape mismatch",
+                         runtime_error);
 }
 
 // === fashion_mnist_create ===
@@ -2036,6 +2073,14 @@ TEST_CASE("Base class virtual destructors run")
 }
 
 // === Model ===
+TEST_CASE("Model add_dense validates activation names")
+{
+    Model model;
+    CHECK_THROWS_WITH_AS(model.add_dense(4, "not_real_activation"),
+                         "Model unknown activation. use relu, softmax, sigmoid or linear",
+                         runtime_error);
+}
+
 TEST_CASE("Model finalize validates layers")
 {
     Model model;
@@ -2043,23 +2088,20 @@ TEST_CASE("Model finalize validates layers")
                          "Model::finalize: no layers added",
                          runtime_error);
 
-    LayerDropout dropout(0.1);
-    model.add(dropout);
+    model.add_dropout(0.1);
     CHECK_THROWS_WITH_AS(model.finalize(),
                          "Model::finalize: final layer cannot be dropout",
                          runtime_error);
 
     Model model2;
-    LayerDense dense(1, "linear");
-    model2.add(dense);
+    model2.add_dense(1, "linear");
     CHECK_NOTHROW(model2.finalize());
 }
 
 TEST_CASE("Model train validates setup and data")
 {
     Model model;
-    LayerDense dense(1, "linear");
-    model.add(dense);
+    model.add_dense(1, "linear");
 
     Matrix X(1, 1, 0.0);
     Matrix y(1, 1, 0.0);
@@ -2071,7 +2113,7 @@ TEST_CASE("Model train validates setup and data")
     LossMeanSquaredError loss;
     AccuracyRegression acc;
     OptimizerSGD opt(0.1, 0.0, 0.0);
-    model.set(loss, acc, &opt);
+    model.configure(loss, acc, &opt);
 
     Matrix empty;
     CHECK_THROWS_WITH_AS(model.train(empty, y, 0),
@@ -2092,15 +2134,13 @@ TEST_CASE("Model train runs with softmax + CCE and validation")
     reset_deterministic_rng(0);
 
     Model model;
-    LayerDense dense1(3, "relu");
-    LayerDense dense2(2, "softmax");
-    model.add(dense1);
-    model.add(dense2);
+    model.add_dense(3, "relu");
+    model.add_dense(2, "softmax");
 
     LossCategoricalCrossEntropy loss;
     AccuracyCategorical acc;
     OptimizerSGD opt(0.1, 0.0, 0.0);
-    model.set(loss, acc, opt);
+    model.configure(loss, acc, opt);
 
     Matrix X(3, 2);
     X(0, 0) = 1.0; X(0, 1) = 0.0;
@@ -2123,13 +2163,12 @@ TEST_CASE("Model train runs without combined softmax path")
     reset_deterministic_rng(1);
 
     Model model;
-    LayerDense dense(1, "linear");
-    model.add(dense);
+    model.add_dense(1, "linear");
 
     LossMeanSquaredError loss;
     AccuracyRegression acc;
     OptimizerSGD opt(0.1, 0.0, 0.0);
-    model.set(loss, acc, opt);
+    model.configure(loss, acc, opt);
 
     Matrix X(2, 1);
     X(0, 0) = 1.0;
@@ -2144,8 +2183,7 @@ TEST_CASE("Model train runs without combined softmax path")
 TEST_CASE("Model evaluate validates setup and data")
 {
     Model model;
-    LayerDense dense(1, "linear");
-    model.add(dense);
+    model.add_dense(1, "linear");
 
     Matrix X(1, 1, 0.0);
     Matrix y(1, 1, 0.0);
@@ -2156,7 +2194,7 @@ TEST_CASE("Model evaluate validates setup and data")
 
     LossMeanSquaredError loss;
     AccuracyRegression acc;
-    model.set(loss, acc, nullptr);
+    model.configure(loss, acc, nullptr);
 
     Matrix empty;
     CHECK_THROWS_WITH_AS(model.evaluate(empty, y),
@@ -2177,12 +2215,11 @@ TEST_CASE("Model evaluate runs with row-vector labels")
     reset_deterministic_rng(0);
 
     Model model;
-    LayerDense dense(1, "linear");
-    model.add(dense);
+    model.add_dense(1, "linear");
 
     LossMeanSquaredError loss;
     AccuracyRegression acc;
-    model.set(loss, acc, nullptr);
+    model.configure(loss, acc, nullptr);
 
     Matrix X(2, 1);
     X(0, 0) = 1.0;
@@ -2197,8 +2234,7 @@ TEST_CASE("Model evaluate runs with row-vector labels")
 TEST_CASE("Model predict returns expected shape and validates batch size")
 {
     Model model;
-    LayerDense dense(1, "linear");
-    model.add(dense);
+    model.add_dense(1, "linear");
 
     Matrix X(3, 2, 1.0);
     Matrix preds = model.predict(X, 0);
@@ -2225,15 +2261,30 @@ TEST_CASE("Model predict returns expected shape and validates batch size")
                          runtime_error);
 }
 
+TEST_CASE("Model clear resets architecture and compiled state")
+{
+    Model model;
+    model.add_dense(4, "relu");
+    model.add_dropout(0.1);
+    model.add_dense(2, "softmax");
+    CHECK_NOTHROW(model.finalize());
+
+    model.clear();
+    CHECK_THROWS_WITH_AS(model.finalize(),
+                         "Model::finalize: no layers added",
+                         runtime_error);
+}
+
 TEST_CASE("Model get_params and set_params validate consistency")
 {
     Model model;
-    LayerDense dense1(2, "linear");
-    LayerDense dense2(1, "linear");
-    model.add(dense1);
-    model.add(dense2);
+    model.add_dense(2, "linear");
+    model.add_dense(1, "linear");
 
     Matrix X(2, 2, 1.0);
+    CHECK_THROWS_WITH_AS(model.get_params(),
+                         "Model::get_params: weights/biases not initialized (run predict/train or load params first)",
+                         runtime_error);
     model.predict(X, 0); // initialize weights
 
     vector<Matrix> params = model.get_params();
@@ -2244,7 +2295,19 @@ TEST_CASE("Model get_params and set_params validate consistency")
     vector<Matrix> bad_params = params;
     bad_params[2] = Matrix(3, 1, 0.0);
     CHECK_THROWS_WITH_AS(model.set_params(bad_params),
-                         "Model::set_params: consecutive weight matrices must be shape-compatible",
+                         "Model::set_params: consecutive dense weight matrices must be shape-compatible",
+                         runtime_error);
+
+    bad_params = params;
+    bad_params[0] = Matrix(2, 3, 0.0);
+    CHECK_THROWS_WITH_AS(model.set_params(bad_params),
+                         "Model::set_params: weights cols must match architecture n_neurons",
+                         runtime_error);
+
+    bad_params = params;
+    bad_params[1] = Matrix(2, 2, 0.0);
+    CHECK_THROWS_WITH_AS(model.set_params(bad_params),
+                         "Model::set_params: biases must have shape (1, n_neurons)",
                          runtime_error);
 }
 
@@ -2252,18 +2315,247 @@ TEST_CASE("Model set_params validates empty and size mismatch cases")
 {
     Model empty_model;
     vector<Matrix> empty_params;
-    CHECK_NOTHROW(empty_model.set_params(empty_params));
+    CHECK_THROWS_WITH_AS(empty_model.set_params(empty_params),
+                         "Model::finalize: no layers added",
+                         runtime_error);
 
     vector<Matrix> some_params = { Matrix(1, 1, 0.0) };
     CHECK_THROWS_WITH_AS(empty_model.set_params(some_params),
-                         "Model::set_params: no trainable layers in model",
+                         "Model::finalize: no layers added",
                          runtime_error);
 
     Model model;
-    LayerDense dense(1, "linear");
-    model.add(dense);
+    model.add_dense(1, "linear");
 
     CHECK_THROWS_WITH_AS(model.set_params(some_params),
-                         "Model::set_params: params size must be 2 * trainable_layers.size()",
+                         "Model::set_params: params size must be 2 * number_of_dense_layers",
                          runtime_error);
+}
+
+TEST_CASE("Model save/save_params require initialized dense parameters")
+{
+    Model model;
+    model.add_dense(2, "relu");
+
+    CHECK_THROWS_WITH_AS(model.save_params("tmp_params.bin"),
+                         "Model: dense weights/biases are not initialized (run train/predict or load params first)",
+                         runtime_error);
+    CHECK_THROWS_WITH_AS(model.save("tmp_model.bin"),
+                         "Model: dense weights/biases are not initialized (run train/predict or load params first)",
+                         runtime_error);
+
+    remove("tmp_params.bin");
+    remove("tmp_model.bin");
+}
+
+TEST_CASE("Model save_params and load_params roundtrip and validation")
+{
+    reset_deterministic_rng(11);
+
+    const string params_path = "test_model_params.bin";
+    remove(params_path.c_str());
+
+    Matrix X(4, 2);
+    X(0, 0) = 1.0; X(0, 1) = 0.0;
+    X(1, 0) = 0.0; X(1, 1) = 1.0;
+    X(2, 0) = 1.0; X(2, 1) = 1.0;
+    X(3, 0) = 0.5; X(3, 1) = 0.25;
+
+    Model m1;
+    m1.add_dense(3, "relu");
+    m1.add_dense(2, "softmax");
+    Matrix ref_preds = m1.predict(X, 2); // initialize weights
+    m1.save_params(params_path);
+
+    Model m2;
+    m2.add_dense(3, "relu");
+    m2.add_dense(2, "softmax");
+    m2.load_params(params_path);
+    Matrix loaded_preds = m2.predict(X, 2);
+    CHECK(Matrix::max_absolute_difference(ref_preds, loaded_preds) == doctest::Approx(0.0));
+
+    CHECK_THROWS_WITH_AS(m2.load_params(""),
+                         "Model::load_params: invalid path",
+                         runtime_error);
+    CHECK_THROWS_WITH_AS(m2.load_params("no_such_params_file.bin"),
+                         "Model::load_params: failed to open file",
+                         runtime_error);
+
+    Model wrong_arch;
+    wrong_arch.add_dense(5, "relu");
+    CHECK_THROWS_WITH_AS(wrong_arch.load_params(params_path),
+                         "Model::load_params: dense layer count mismatch",
+                         runtime_error);
+
+    const string bad_magic_path = "test_bad_magic_params.bin";
+    {
+        ofstream out(bad_magic_path, ios::binary);
+        const char bad_magic[11] = {'B','A','D','P','A','R','A','M','S','X','X'};
+        out.write(bad_magic, sizeof(bad_magic));
+    }
+    CHECK_THROWS_WITH_AS(m2.load_params(bad_magic_path),
+                         "Model::load_params: invalid file (magic mismatch)",
+                         runtime_error);
+
+    remove(params_path.c_str());
+    remove(bad_magic_path.c_str());
+}
+
+TEST_CASE("Model save and load roundtrip and validation")
+{
+    reset_deterministic_rng(17);
+
+    const string model_path = "test_full_model.bin";
+    remove(model_path.c_str());
+
+    Matrix X(5, 2);
+    X(0, 0) = 1.0; X(0, 1) = 0.0;
+    X(1, 0) = 0.0; X(1, 1) = 1.0;
+    X(2, 0) = 1.0; X(2, 1) = 1.0;
+    X(3, 0) = 0.5; X(3, 1) = 0.2;
+    X(4, 0) = 0.2; X(4, 1) = 0.5;
+
+    Model m1;
+    m1.add_dense(4, "relu", 0.0, 1e-4, 0.0, 1e-4);
+    m1.add_dropout(0.1);
+    m1.add_dense(3, "sigmoid");
+    m1.add_dense(2, "softmax");
+
+    Matrix ref_preds = m1.predict(X, 2); // initialize weights
+    m1.save(model_path);
+
+    Model m2 = Model::load(model_path);
+    Matrix loaded_preds = m2.predict(X, 2);
+    CHECK(Matrix::max_absolute_difference(ref_preds, loaded_preds) == doctest::Approx(0.0));
+
+    CHECK_THROWS_WITH_AS(m1.save(""),
+                         "Model::save: invalid path",
+                         runtime_error);
+    CHECK_THROWS_WITH_AS(Model::load(""),
+                         "Model::load: invalid path",
+                         runtime_error);
+    CHECK_THROWS_WITH_AS(Model::load("no_such_model_file.bin"),
+                         "Model::load: failed to open file",
+                         runtime_error);
+
+    const string bad_magic_path = "test_bad_magic_model.bin";
+    {
+        ofstream out(bad_magic_path, ios::binary);
+        const char bad_magic[11] = {'B','A','D','O','B','J','E','C','T','X','X'};
+        out.write(bad_magic, sizeof(bad_magic));
+    }
+    CHECK_THROWS_WITH_AS(Model::load(bad_magic_path),
+                         "Model::load: invalid file (magic mismatch)",
+                         runtime_error);
+
+    remove(model_path.c_str());
+    remove(bad_magic_path.c_str());
+}
+
+TEST_CASE("Model::load validates corrupted layer metadata")
+{
+    const string p_bad_kind = "test_model_bad_kind.bin";
+    const string p_zero_neurons = "test_model_zero_neurons.bin";
+    const string p_bad_activation = "test_model_bad_activation.bin";
+    const string p_count_mismatch = "test_model_count_mismatch.bin";
+    const string p_last_dropout = "test_model_last_dropout.bin";
+
+    remove(p_bad_kind.c_str());
+    remove(p_zero_neurons.c_str());
+    remove(p_bad_activation.c_str());
+    remove(p_count_mismatch.c_str());
+    remove(p_last_dropout.c_str());
+
+    const char magic[11] = {'M','O','D','E','L','O','B','J','E','C','T'};
+    const uint8_t dense_kind = 0;
+    const uint8_t dropout_kind = 1;
+    const uint8_t relu_activation = 0;
+
+    // invalid LayerKind
+    {
+        ofstream out(p_bad_kind, ios::binary);
+        out.write(magic, sizeof(magic));
+        write_trivial_raw<uint64_t>(out, 1);      // layers_count
+        write_trivial_raw<uint8_t>(out, 99);      // invalid kind
+        write_trivial_raw<uint64_t>(out, 0);      // dense_count
+    }
+    CHECK_THROWS_WITH_AS(Model::load(p_bad_kind),
+                         "Model serialization: invalid LayerKind",
+                         runtime_error);
+
+    // dense n_neurons == 0
+    {
+        ofstream out(p_zero_neurons, ios::binary);
+        out.write(magic, sizeof(magic));
+        write_trivial_raw<uint64_t>(out, 1);      // layers_count
+        write_trivial_raw<uint8_t>(out, dense_kind);
+        write_trivial_raw<uint64_t>(out, 0);      // n_neurons invalid
+        write_trivial_raw<uint8_t>(out, relu_activation);
+        write_trivial_raw<double>(out, 0.0);
+        write_trivial_raw<double>(out, 0.0);
+        write_trivial_raw<double>(out, 0.0);
+        write_trivial_raw<double>(out, 0.0);
+        write_trivial_raw<uint64_t>(out, 0);      // dense_count
+    }
+    CHECK_THROWS_WITH_AS(Model::load(p_zero_neurons),
+                         "Model::load: dense layer n_neurons must be > 0",
+                         runtime_error);
+
+    // invalid ActivationKind
+    {
+        ofstream out(p_bad_activation, ios::binary);
+        out.write(magic, sizeof(magic));
+        write_trivial_raw<uint64_t>(out, 1);      // layers_count
+        write_trivial_raw<uint8_t>(out, dense_kind);
+        write_trivial_raw<uint64_t>(out, 2);      // n_neurons
+        write_trivial_raw<uint8_t>(out, 99);      // invalid activation kind
+        write_trivial_raw<double>(out, 0.0);
+        write_trivial_raw<double>(out, 0.0);
+        write_trivial_raw<double>(out, 0.0);
+        write_trivial_raw<double>(out, 0.0);
+        write_trivial_raw<uint64_t>(out, 0);      // dense_count
+    }
+    CHECK_THROWS_WITH_AS(Model::load(p_bad_activation),
+                         "Model serialization: invalid ActivationKind",
+                         runtime_error);
+
+    // dense count mismatch
+    {
+        ofstream out(p_count_mismatch, ios::binary);
+        out.write(magic, sizeof(magic));
+        write_trivial_raw<uint64_t>(out, 1);      // layers_count
+        write_trivial_raw<uint8_t>(out, dense_kind);
+        write_trivial_raw<uint64_t>(out, 2);      // n_neurons
+        write_trivial_raw<uint8_t>(out, relu_activation);
+        write_trivial_raw<double>(out, 0.0);
+        write_trivial_raw<double>(out, 0.0);
+        write_trivial_raw<double>(out, 0.0);
+        write_trivial_raw<double>(out, 0.0);
+        write_trivial_raw<uint64_t>(out, 2);      // wrong dense_count
+        Matrix w(1, 1, 0.0), b(1, 1, 0.0);
+        write_matrix_raw(out, w);
+        write_matrix_raw(out, b);
+    }
+    CHECK_THROWS_WITH_AS(Model::load(p_count_mismatch),
+                         "Model::load: dense layer count mismatch",
+                         runtime_error);
+
+    // last layer dropout (rejected in set_architecture)
+    {
+        ofstream out(p_last_dropout, ios::binary);
+        out.write(magic, sizeof(magic));
+        write_trivial_raw<uint64_t>(out, 1);      // layers_count
+        write_trivial_raw<uint8_t>(out, dropout_kind);
+        write_trivial_raw<double>(out, 0.1);
+        write_trivial_raw<uint64_t>(out, 0);      // dense_count
+    }
+    CHECK_THROWS_WITH_AS(Model::load(p_last_dropout),
+                         "Model::set_architecture: final layer cannot be dropout",
+                         runtime_error);
+
+    remove(p_bad_kind.c_str());
+    remove(p_zero_neurons.c_str());
+    remove(p_bad_activation.c_str());
+    remove(p_count_mismatch.c_str());
+    remove(p_last_dropout.c_str());
 }
