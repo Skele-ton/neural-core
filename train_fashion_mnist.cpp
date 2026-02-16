@@ -57,7 +57,7 @@ int main()
         OptimizerAdam optimizer(1e-3);
         model.configure(loss, accuracy, optimizer);
 
-        model.train(X, y, 1, 128, 100, &X_test, &y_test);
+        model.train(X, y, 10, 128, 100, &X_test, &y_test);
 
         const Matrix preds_model = model.predict(X_test, 128);
         const std::size_t pred_rows = preds_model.get_rows();
