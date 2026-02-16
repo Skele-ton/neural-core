@@ -24,6 +24,12 @@ option(ENABLE_COVERAGE "Enable coverage instrumentation + gcovr target" OFF)
 # keep app/tests unchanged for now; they still build from current sources
 add_library(neural_core STATIC
   neural_core.cpp
+  src/model.cpp
+  src/activations.cpp
+  src/layers.cpp
+  src/losses.cpp
+  src/optimizers.cpp
+  src/accuracy.cpp
   src/data.cpp
   src/scatter_plot.cpp
   src/core_utils.cpp
@@ -36,7 +42,13 @@ target_include_directories(neural_core PUBLIC ${CMAKE_SOURCE_DIR} ${CMAKE_SOURCE
 # run main app
 # cmake --build <build-dir> --target run
 add_executable(neural_core_app
-  neural_core.cpp
+  train_fashion_mnist.cpp
+  src/model.cpp
+  src/activations.cpp
+  src/layers.cpp
+  src/losses.cpp
+  src/optimizers.cpp
+  src/accuracy.cpp
   src/data.cpp
   src/scatter_plot.cpp
   src/core_utils.cpp
@@ -58,6 +70,12 @@ enable_testing()
 
 add_executable(tests
   tests.cpp
+  src/model.cpp
+  src/activations.cpp
+  src/layers.cpp
+  src/losses.cpp
+  src/optimizers.cpp
+  src/accuracy.cpp
   src/data.cpp
   src/scatter_plot.cpp
   src/core_utils.cpp
