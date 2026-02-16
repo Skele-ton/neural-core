@@ -23,14 +23,22 @@ int main()
         set_global_seed(0);
         set_thread_stream_id(0);
 
+#ifdef ENABLE_MATPLOT
         Matrix X_generated;
         Matrix y_generated;
         generate_spiral_data(1000, 3, X_generated, y_generated);
 
         const std::string path = "plot.png";
-        scatter_plot(path, X_generated, y_generated);
-        std::cout << "data plotting complete. generated data plot is in file: "
-                  << path << "\n";
+        try {
+            scatter_plot(path, X_generated, y_generated);
+            std::cout << "data plotting complete. generated data plot is in file: "
+                      << path << "\n";
+        } catch (const std::runtime_error& e) {
+            std::cout << "plotting skipped: " << e.what() << '\n';
+        }
+#else
+        std::cout << "plotting skipped (built with ENABLE_MATPLOT=OFF)\n";
+#endif
 
         Matrix X;
         Matrix y;

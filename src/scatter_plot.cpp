@@ -1,8 +1,11 @@
 #include "neural_core/scatter_plot.hpp"
 
 #include <algorithm>
+#include <chrono>
+#include <filesystem>
 #include <stdexcept>
 #include <string>
+#include <thread>
 #include <vector>
 
 #ifdef ENABLE_MATPLOT
@@ -104,6 +107,26 @@ void scatter_plot(const string& path, const Matrix& points, const Matrix& labels
     matplot::ylim({ymin - y_pad, ymax + y_pad});
     matplot::grid(matplot::on);
 
-    matplot::save(path);
+    (void)matplot::save(path);
+
+    // some Matplot++/backend combinations complete file output asynchronously
+    // poll briefly to avoid false negatives from immediate existence checks
+    constexpr int max_attempts = 100;
+    constexpr auto retry_delay = std::chrono::milliseconds(10);
+    bool wrote_file = false;
+    for (int attempt = 0; attempt < max_attempts; ++attempt) {
+        std::error_code ec;
+        const bool exists = std::filesystem::exists(path, ec);
+        const auto bytes = (exists && !ec) ? std::filesystem::file_size(path, ec) : 0;
+        wrote_file = !ec && exists && bytes > 0;
+        if (wrote_file) {
+            break;
+        }
+        std::this_thread::sleep_for(retry_delay);
+    }
+
+    if (!wrote_file) {
+        throw runtime_error("scatter_plot: failed to write output file: " + path);
+    }
 #endif
 }

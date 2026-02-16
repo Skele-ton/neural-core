@@ -7,7 +7,6 @@ plot.*
 neural_core_app
 neural_core_app.exe
 doctest.h
-tests
 tests_bin
 tests.gcda
 tests.gcno
