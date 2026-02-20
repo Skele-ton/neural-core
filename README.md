@@ -38,7 +38,8 @@ The app trains a small dense network on Fashion-MNIST and supports optional scat
 
 ## Requirements
 
-- C++ compiler with C++17 support (GCC/Clang/MSVC)
+- Linux environment
+- C++ compiler with C++17 support (GCC or Clang)
 - CMake 3.15+
 - `doctest.h` for tests
   - Repo: <https://github.com/doctest/doctest>
@@ -54,6 +55,8 @@ The app trains a small dense network on Fashion-MNIST and supports optional scat
 - `gcovr` for coverage reporting when `ENABLE_COVERAGE=ON`
 
 ## Build
+
+The build/run flow targets Linux only.
 
 Recommended: use separate build directories for different option sets.
 
@@ -162,6 +165,8 @@ CMakeLists.txt
 
 - `fashion_mnist_create: dataset files not found under: ...`
   - Verify dataset directory and exact IDX filenames.
+- Windows build/runtime behavior
+  - Windows is not supported at the moment; use Linux for build and execution.
 - Plotting errors or skipped plotting with `ENABLE_MATPLOT=ON`
   - Verify `gnuplot` is installed and available in `PATH`.
 - Coverage configure/build failure
